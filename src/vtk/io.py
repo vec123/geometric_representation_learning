@@ -1,0 +1,39 @@
+import os
+import vtk
+
+def load_vtp(vtp_path):
+    reader = vtk.vtkXMLPolyDataReader()
+    reader.SetFileName(vtp_path)
+    reader.Update()
+    return reader.GetOutput()
+
+def load_vtu(filename):
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"File not found: {filename}")
+        
+    reader = vtk.vtkXMLUnstructuredGridReader()
+    reader.SetFileName(filename)
+    reader.Update()  # This executes the reader
+    
+    # Return the actual data object, not the port
+    return reader.GetOutput()
+
+def save_vtp(polydata, vtk_path, binary=True):
+    """Saves the PolyData object to disk using the XML format (VTP)."""
+    print("Saving to:", vtk_path)
+    os.makedirs(os.path.dirname(vtk_path), exist_ok=True)
+    # Use vtkXMLPolyDataWriter instead of vtkPolyDataWriter
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(vtk_path)
+    writer.SetInputData(polydata)
+    
+    if binary:
+        # For XML files, 'binary' is the default and is handled automatically.
+        # You can specify the data mode if needed:
+        writer.SetDataModeToAppended() 
+        writer.SetCompressorTypeToZLib() # Optional: compresses the file
+    else:
+        writer.SetDataModeToAscii()
+        
+    return writer.Write() == 1
+

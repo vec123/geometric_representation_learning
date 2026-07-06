@@ -1,0 +1,212 @@
+# from asyncio import graph
+
+import torch
+from torch_cluster import radius
+from torch_geometric.data import Data, Batch
+from torch_geometric.nn import radius
+import numpy as np
+from torch_geometric.nn import radius_graph
+
+
+def apply_noise_and_masking(vertices, masks=None, noise_std=0.0, dropout_rate=0.0, key=None):
+    """Stage 1: Apply stochastic augmentations."""
+    device = vertices.device
+    gen = key if isinstance(key, torch.Generator) else None
+    
+    # Apply Noise
+    if noise_std > 0:
+        vertices = vertices + torch.randn(vertices.shape, device=device, generator=gen) * noise_std
+        
+    # Apply Masking/Dropout
+    mask = (masks > 0.5) if masks is not None else torch.ones((vertices.shape[0], vertices.shape[1]), dtype=torch.bool, device=device)
+    if dropout_rate > 0:
+        random_mask = torch.rand(mask.shape, device=device, generator=gen) > dropout_rate
+        mask &= random_mask
+        
+    return vertices, mask
+
+def sample_nodes(vertices, mask, num_samples=None, mode='uniform', key=None):
+    """Stage 2: Select a subset of nodes based on sampling strategy."""
+    batch_size, num_nodes = mask.shape
+    device = vertices.device
+    gen = key if isinstance(key, torch.Generator) else None
+    
+    if num_samples is None:
+        # Keep all valid nodes
+        node_list = [vertices[i, mask[i]] for i in range(batch_size)]
+        valid_nodes = torch.cat(node_list, dim=0)
+        batch_vec = torch.cat([torch.full((len(nodes),), i, device=device) for i, nodes in enumerate(node_list)], dim=0)
+    else:
+        # Fixed-size sampling
+        if mode == 'gaussian':
+            # Assumes logic for probability distribution mapping is implemented here
+            probs = torch.ones((batch_size, num_nodes), device=device) 
+            keep_indices = torch.multinomial(probs, num_samples=num_samples, replacement=False, generator=gen)
+        else: # Uniform
+            rand_vals = torch.rand((batch_size, num_nodes), device=device, generator=gen)
+            rand_vals = torch.where(mask, rand_vals, torch.tensor(-1.0, device=device))
+            keep_indices = torch.argsort(rand_vals, dim=1, descending=True)[:, :num_samples]
+            
+        batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, num_samples)
+        valid_nodes = vertices[batch_idx, keep_indices].reshape(-1, vertices.shape[-1])
+        batch_vec = batch_idx.reshape(-1)
+        
+    return valid_nodes, batch_vec
+
+def build_radius_graph(nodes, batch_vec, r_max=0.4):
+    """Stage 3: Compute graph structure from node positions."""
+    edge_index = radius_graph(nodes, r=r_max, batch=batch_vec, max_num_neighbors=128)
+    return Data(pos=nodes, edge_index=edge_index, batch=batch_vec)
+
+
+def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9, 
+                             noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None):
+    
+    if dropout_rate is not None and num_samples is not None:
+        raise ValueError("Please provide either dropout_rate or num_samples, not both.")
+    if isinstance(masks, np.ndarray):
+        masks = torch.tensor(masks, dtype=torch.bool)
+
+    # Standardize input
+    v = vertices_padded.clone() if isinstance(vertices_padded, torch.Tensor) else torch.tensor(vertices_padded, dtype=torch.float32)
+    
+    #  Augment
+    v, mask = apply_noise_and_masking(v, masks, noise_std, dropout_rate or 0.0, key)
+    
+    #  Sample
+    nodes, batch_vec = sample_nodes(v, mask, num_samples, sampling_mode, key)
+    
+    #  Build Graph
+    graph = build_radius_graph(nodes, batch_vec, r_max)
+
+
+    return graph
+
+def get_individual_graph(batch_obj, index):
+    """
+    Extracts a single graph from a PyG Batch object correctly.
+    """
+    # 1. Mask for nodes belonging to this graph
+    node_mask = (batch_obj.batch == index)
+    V = batch_obj.pos[node_mask]
+
+    # 2. Extract edges where the source node belongs to the current graph
+    # batch_obj.edge_index is (2, total_edges)
+    # batch_obj.batch[batch_obj.edge_index[0]] tells us which graph each edge belongs to
+    edge_mask = (batch_obj.batch[batch_obj.edge_index[0]] == index)
+    
+    # Filter the edge_index
+    E = batch_obj.edge_index[:, edge_mask]
+    
+    # OPTIONAL: Remap node indices in E to be 0-indexed relative to the new graph
+    # If your downstream tools expect V to be index 0 to N-1
+    node_indices = torch.nonzero(node_mask).flatten()
+    mapping = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(node_indices)}
+    
+    # Adjust E if necessary (only if downstream code requires local indexing)
+    # If not, you can return V and E as is.
+    
+    return V, E
+""" 
+def get_individual_graph(batch_obj, index):
+
+    mask = (batch_obj.batch == index)
+
+    # 2. Extract the vertex positions for this graph
+    V= batch_obj.pos[mask]
+    source_nodes = batch_obj.edge_index[index]
+    edge_mask = (batch_obj.batch[source_nodes] == index)
+    E = batch_obj.edge_index[:, edge_mask]
+    return V,E
+"""
+def get_vertices_and_edges(individual_graph):
+    """
+    Extracts vertices and edges from a single PyG Data object.
+    
+    Args:
+        individual_graph (Data): A single graph object.
+        
+    Returns:
+        points (np.array): (N, 3) float32 array
+        lines (np.array): (M, 2) int64 array
+    """
+    # 1. Extract and convert points
+    # Since this is an individual graph, no masking/shifting is needed.
+    points = individual_graph.pos.detach().cpu().numpy().astype(np.float32)
+    
+    # 2. Extract and convert edges
+    # edge_index is already relative (starts from 0) in a single Data object
+    lines = individual_graph.edge_index.T.detach().cpu().numpy().astype(np.int64)
+    
+    return points, lines
+
+
+
+
+
+
+def get_graphs_from_vertices_(
+    vertices_padded, 
+    masks=None, 
+    r_max=0.4, 
+    dropout_rate=0.9, 
+    noise_std=0.0, 
+    key=None, 
+    sampling_mode='uniform',
+    num_samples=None
+):
+    if dropout_rate is not None and num_samples is not None:
+        raise ValueError("Please provide either dropout_rate or num_samples, not both.")
+    
+    if not isinstance(vertices_padded, torch.Tensor):
+        vertices_padded = torch.tensor(vertices_padded, dtype=torch.float32)
+    
+    device = vertices_padded.device
+    batch_size, num_nodes, _ = vertices_padded.shape
+    
+    # 1. Masking & Noise
+    final_mask = (masks > 0.5) if masks is not None else torch.ones((batch_size, num_nodes), dtype=torch.bool, device=device)
+    
+    if noise_std > 0:
+        # Use torch.randn with explicit shape instead of randn_like
+        noise = torch.randn(vertices_padded.shape, device=device, generator=key)
+        vertices_padded = vertices_padded + noise * noise_std
+
+    # 2. Vectorized Dropout with optional key
+    if dropout_rate is not None and dropout_rate > 0:
+        random_values = torch.rand((batch_size, num_nodes), device=device, generator=key)
+        random_mask = random_values > dropout_rate
+        final_mask = final_mask & random_mask
+
+    data_list = []
+    for i in range(batch_size):
+        nodes = vertices_padded[i][final_mask[i]]
+        
+        # Determine how many nodes to keep
+        if num_samples is not None:
+            n_keep = min(num_samples, nodes.size(0))
+        elif dropout_rate is not None and dropout_rate > 0:
+            n_keep = max(1, int(nodes.size(0) * (1 - dropout_rate)))
+        else:
+            # Both are None or dropout_rate is 0: keep all
+            n_keep = nodes.size(0)
+
+        # Sampling Logic
+        if n_keep < nodes.size(0):
+            if sampling_mode == 'gaussian':
+                com = nodes.mean(dim=0)
+                dist = torch.norm(nodes - com, dim=1)
+                sigma = dist.std() + 1e-6
+                probs = torch.exp(-0.5 * (dist / sigma)**2)
+                keep_indices = torch.multinomial(probs, num_samples=n_keep, replacement=False, generator=key)
+                nodes = nodes[keep_indices]
+            
+            elif sampling_mode == 'uniform':
+                indices = torch.randperm(nodes.size(0), generator=key)[:n_keep]
+                nodes = nodes[indices]
+
+        # Build Radius Graph
+        edge_index = radius(nodes, nodes, r=r_max, max_num_neighbors=128)
+        data_list.append(Data(pos=nodes, edge_index=edge_index))
+    
+    return Batch.from_data_list(data_list)
