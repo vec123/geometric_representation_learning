@@ -51,7 +51,7 @@ key = torch.Generator(device='cpu')
 key.manual_seed(0)
 graphs = get_graphs_from_vertices(shape_vertices,
                                           masks=shape_mask, r_max=0.1, 
-                                          dropout_rate=None, 
+                                          dropout_rate=0.8, 
                                           noise_std=0.05,
                                           key = key,
                                           sampling_mode=sampling_mode,

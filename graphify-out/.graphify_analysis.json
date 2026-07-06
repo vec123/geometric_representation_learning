@@ -1,0 +1,323 @@
+{
+  "communities": {
+    "0": [
+      "config_root",
+      "config_root_get_project_root",
+      "config_root_rationale_5",
+      "scripts_test_group_equivariant_train",
+      "src_graphs_graphs",
+      "src_graphs_graphs_apply_noise_and_masking",
+      "src_graphs_graphs_build_radius_graph",
+      "src_graphs_graphs_get_graphs_from_vertices",
+      "src_graphs_graphs_get_individual_graph",
+      "src_graphs_graphs_get_vertices_and_edges",
+      "src_graphs_graphs_rationale_12",
+      "src_graphs_graphs_rationale_123",
+      "src_graphs_graphs_rationale_29",
+      "src_graphs_graphs_rationale_57",
+      "src_graphs_graphs_rationale_86",
+      "src_graphs_graphs_sample_nodes",
+      "src_learning_logger_train_logs",
+      "src_learning_logger_train_logs_rationale_17",
+      "src_learning_logger_train_logs_traininglogger",
+      "src_learning_logger_train_logs_traininglogger_init",
+      "src_learning_logger_train_logs_traininglogger_log_visualizations",
+      "src_learning_logger_train_logs_traininglogger_save_checkpoint",
+      "src_transforms_padding",
+      "src_transforms_padding_pad_vertex_list",
+      "src_transforms_padding_rationale_4",
+      "src_vtk_create",
+      "src_vtk_create_create_polydata",
+      "src_vtk_create_create_polydata_w_lines",
+      "src_vtk_create_rationale_46",
+      "src_vtk_create_rationale_6",
+      "src_vtk_extract",
+      "src_vtk_extract_extract_vtp_points_cells",
+      "src_vtk_io",
+      "src_vtk_io_load_vtp",
+      "src_vtk_io_load_vtu",
+      "src_vtk_io_rationale_22",
+      "src_vtk_io_save_vtp",
+      "tests_graphs_test_graphs",
+      "tests_group_transforms_test_group_transforms",
+      "tests_learning_test_logger",
+      "tests_learning_test_logger_test_save_checkpoint"
+    ],
+    "1": [
+      "messagepassing",
+      "src_learning_layers_equivariant_self_spatial_layer",
+      "src_learning_layers_equivariant_self_spatial_layer_equilayer",
+      "src_learning_layers_equivariant_self_spatial_layer_equilayer_forward",
+      "src_learning_layers_equivariant_self_spatial_layer_equilayer_init",
+      "src_learning_models_group_encoder",
+      "src_learning_modules_equivariant_attention",
+      "src_learning_modules_equivariant_attention_equivariantattention",
+      "src_learning_modules_equivariant_attention_equivariantattention_forward",
+      "src_learning_modules_equivariant_attention_equivariantattention_init",
+      "src_learning_modules_equivariant_interaction",
+      "src_learning_modules_equivariant_interaction_gatingblock",
+      "src_learning_modules_equivariant_interaction_gatingblock_forward",
+      "src_learning_modules_equivariant_interaction_gatingblock_init",
+      "src_learning_modules_equivariant_interaction_selfinteraction",
+      "src_learning_modules_equivariant_interaction_selfinteraction_forward",
+      "src_learning_modules_equivariant_interaction_selfinteraction_init",
+      "src_learning_modules_equivariant_interaction_spatialconvolution",
+      "src_learning_modules_equivariant_interaction_spatialconvolution_forward",
+      "src_learning_modules_equivariant_interaction_spatialconvolution_init",
+      "src_learning_modules_equivariant_interaction_spatialconvolution_message",
+      "src_learning_modules_equivariant_interaction_spatialconvolution_update",
+      "src_learning_modules_equivariant_layer_norm",
+      "src_learning_modules_equivariant_layer_norm_equivariantlayernorm",
+      "src_learning_modules_equivariant_layer_norm_equivariantlayernorm_forward",
+      "src_learning_modules_equivariant_layer_norm_equivariantlayernorm_init",
+      "tests_learning_test_equivariant",
+      "tests_learning_test_equivariant_test_equivariant_attention",
+      "tests_learning_test_equivariant_test_equivariant_layer_norm"
+    ],
+    "2": [
+      "src_geometry_geometry_np",
+      "src_geometry_geometry_np_build_grad",
+      "src_geometry_geometry_np_build_grad_point_cloud",
+      "src_geometry_geometry_np_build_tangent_frames",
+      "src_geometry_geometry_np_compute_grads",
+      "src_geometry_geometry_np_compute_mean_curvature",
+      "src_geometry_geometry_np_compute_spectral_operators",
+      "src_geometry_geometry_np_compute_spectral_operators_fast",
+      "src_geometry_geometry_np_cross",
+      "src_geometry_geometry_np_dot",
+      "src_geometry_geometry_np_edge_tangent_vectors",
+      "src_geometry_geometry_np_find_knn_numpy",
+      "src_geometry_geometry_np_load_spectral_data",
+      "src_geometry_geometry_np_mesh_vertex_normals",
+      "src_geometry_geometry_np_neighborhood_normal",
+      "src_geometry_geometry_np_norm",
+      "src_geometry_geometry_np_normalize",
+      "src_geometry_geometry_np_project_to_tangent",
+      "src_geometry_geometry_np_rationale_139",
+      "src_geometry_geometry_np_rationale_189",
+      "src_geometry_geometry_np_rationale_22",
+      "src_geometry_geometry_np_rationale_29",
+      "src_geometry_geometry_np_rationale_322",
+      "src_geometry_geometry_np_rationale_344",
+      "src_geometry_geometry_np_rationale_386",
+      "src_geometry_geometry_np_rationale_62",
+      "src_geometry_geometry_np_save_spectral_data",
+      "src_geometry_geometry_np_test_lbo_spectrum",
+      "src_geometry_geometry_np_vertex_normals"
+    ],
+    "3": [
+      "src_learning_trainers_e3_end2end",
+      "src_learning_trainers_e3_end2end_trainingorchestrator",
+      "src_learning_trainers_e3_end2end_trainingorchestrator_init",
+      "src_learning_trainers_e3_end2end_trainingorchestrator_run",
+      "src_learning_trainers_e3_end2end_trainingstepper",
+      "src_learning_trainers_e3_end2end_trainingstepper_init",
+      "src_learning_trainers_e3_end2end_trainingstepper_reparameterize",
+      "src_learning_trainers_e3_end2end_trainingstepper_train_step",
+      "tests_learning_test_trainers",
+      "tests_learning_test_trainers_dummydataloader",
+      "tests_learning_test_trainers_dummydataloader_get_next",
+      "tests_learning_test_trainers_dummydataloader_init",
+      "tests_learning_test_trainers_dummydecoder",
+      "tests_learning_test_trainers_dummydecoder_forward",
+      "tests_learning_test_trainers_dummydecoder_init",
+      "tests_learning_test_trainers_dummyencoder",
+      "tests_learning_test_trainers_dummyencoder_forward",
+      "tests_learning_test_trainers_dummyencoder_init",
+      "tests_learning_test_trainers_dummylogger",
+      "tests_learning_test_trainers_dummylogger_init",
+      "tests_learning_test_trainers_dummylogger_log_metrics",
+      "tests_learning_test_trainers_dummylogger_save_checkpoint",
+      "tests_learning_test_trainers_dummylogger_visualize_results",
+      "tests_learning_test_trainers_test_training_orchestrator",
+      "tests_learning_test_trainers_test_training_stepper"
+    ],
+    "4": [
+      "src_learning_losses_losses",
+      "src_learning_losses_losses_chamfer_loss",
+      "src_learning_losses_losses_combined_surface_loss",
+      "src_learning_losses_losses_geometric_clustering_loss",
+      "src_learning_losses_losses_kl_divergence_loss",
+      "src_learning_losses_losses_laplacian_loss",
+      "src_learning_losses_losses_rationale_29",
+      "src_learning_losses_losses_rationale_42",
+      "src_learning_losses_losses_rationale_5",
+      "tests_learning_test_losses",
+      "tests_learning_test_losses_new",
+      "tests_learning_test_losses_new_test_losses",
+      "tests_learning_test_losses_test_losses"
+    ],
+    "5": [
+      "src_learning_models_folding_decoder",
+      "src_learning_models_folding_decoder_foldingdecoder",
+      "src_learning_models_folding_decoder_foldingdecoder_forward",
+      "src_learning_models_folding_decoder_foldingdecoder_init",
+      "src_learning_models_folding_decoder_foldingdecoder_positional_encoding",
+      "src_learning_models_group_encoder_groupencoder",
+      "src_learning_models_group_encoder_groupencoder_forward",
+      "src_learning_models_group_encoder_groupencoder_get_rotation_matrix_from_two_vectors",
+      "src_learning_models_group_encoder_groupencoder_init",
+      "tests_learning_test_models",
+      "tests_learning_test_models_test_folding_decoder",
+      "tests_learning_test_models_test_group_encoder_rotation"
+    ],
+    "6": [
+      "src_vtk_process",
+      "src_vtk_process_clean_vtp",
+      "src_vtk_process_filter_vtp_largest_component",
+      "src_vtk_process_rationale_23",
+      "src_vtk_process_rationale_5",
+      "src_vtk_process_reduce_vtp"
+    ],
+    "7": [
+      "src_transforms_group_transforms",
+      "src_transforms_group_transforms_get_y_rot",
+      "src_transforms_group_transforms_rationale_16",
+      "src_transforms_group_transforms_se3_transform",
+      "src_transforms_group_transforms_se3_transform_numpy"
+    ],
+    "8": [
+      "src_vtk_convert",
+      "src_vtk_convert_convert_vtu_to_vtp_vtk",
+      "src_vtk_convert_rationale_5"
+    ],
+    "9": [
+      "src_vtk_fields",
+      "src_vtk_fields_add_point_field",
+      "src_vtk_fields_rationale_5"
+    ],
+    "10": [
+      "src_learning_modules_transformers_attention"
+    ],
+    "11": [
+      "src_learning_modules_transformers_perceiver"
+    ]
+  },
+  "cohesion": {
+    "0": 0.1073170731707317,
+    "1": 0.11330049261083744,
+    "2": 0.12807881773399016,
+    "3": 0.14666666666666667,
+    "4": 0.4358974358974359,
+    "5": 0.24242424242424243,
+    "6": 0.3333333333333333,
+    "7": 0.5,
+    "8": 0.6666666666666666,
+    "9": 0.6666666666666666,
+    "10": 1.0,
+    "11": 1.0
+  },
+  "gods": [
+    {
+      "id": "src_learning_trainers_e3_end2end_trainingstepper",
+      "label": "TrainingStepper",
+      "degree": 11
+    },
+    {
+      "id": "src_learning_trainers_e3_end2end_trainingorchestrator",
+      "label": "TrainingOrchestrator",
+      "degree": 10
+    },
+    {
+      "id": "src_geometry_geometry_np_norm",
+      "label": "norm()",
+      "degree": 9
+    },
+    {
+      "id": "src_learning_layers_equivariant_self_spatial_layer_equilayer",
+      "label": "EquiLayer",
+      "degree": 9
+    },
+    {
+      "id": "src_learning_losses_losses_combined_surface_loss",
+      "label": "combined_surface_loss()",
+      "degree": 9
+    },
+    {
+      "id": "src_learning_modules_equivariant_interaction_spatialconvolution",
+      "label": "SpatialConvolution",
+      "degree": 9
+    },
+    {
+      "id": "src_learning_losses_losses_kl_divergence_loss",
+      "label": "kl_divergence_loss()",
+      "degree": 8
+    },
+    {
+      "id": "src_learning_models_group_encoder_groupencoder",
+      "label": "GroupEncoder",
+      "degree": 8
+    },
+    {
+      "id": "src_learning_modules_equivariant_layer_norm_equivariantlayernorm",
+      "label": "EquivariantLayerNorm",
+      "degree": 8
+    },
+    {
+      "id": "tests_learning_test_trainers_dummylogger",
+      "label": "DummyLogger",
+      "degree": 8
+    }
+  ],
+  "surprises": [
+    {
+      "source": "test_save_checkpoint()",
+      "target": "TrainingLogger",
+      "source_files": [
+        "tests/learning/test_logger.py",
+        "src/learning/logger/train_logs.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; peripheral node `test_save_checkpoint()` unexpectedly reaches hub `TrainingLogger`"
+    },
+    {
+      "source": "test_folding_decoder()",
+      "target": "FoldingDecoder",
+      "source_files": [
+        "tests/learning/test_models.py",
+        "src/learning/models/folding_decoder.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; peripheral node `test_folding_decoder()` unexpectedly reaches hub `FoldingDecoder`"
+    },
+    {
+      "source": "test_group_encoder_rotation()",
+      "target": "GroupEncoder",
+      "source_files": [
+        "tests/learning/test_models.py",
+        "src/learning/models/group_encoder.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; peripheral node `test_group_encoder_rotation()` unexpectedly reaches hub `GroupEncoder`"
+    },
+    {
+      "source": "test_equivariant_attention()",
+      "target": "EquivariantAttention",
+      "source_files": [
+        "tests/learning/test_equivariant.py",
+        "src/learning/modules/equivariant/attention.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; peripheral node `test_equivariant_attention()` unexpectedly reaches hub `EquivariantAttention`"
+    },
+    {
+      "source": "test_equivariant_layer_norm()",
+      "target": "EquivariantLayerNorm",
+      "source_files": [
+        "tests/learning/test_equivariant.py",
+        "src/learning/modules/equivariant/layer_norm.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; peripheral node `test_equivariant_layer_norm()` unexpectedly reaches hub `EquivariantLayerNorm`"
+    }
+  ],
+  "tokens": {
+    "input": 0,
+    "output": 0
+  }
+}

@@ -1,6 +1,7 @@
 # from asyncio import graph
 
 import torch
+import torch_cluster
 from torch_cluster import radius
 from torch_geometric.data import Data, Batch
 from torch_geometric.nn import radius
@@ -25,8 +26,8 @@ def apply_noise_and_masking(vertices, masks=None, noise_std=0.0, dropout_rate=0.
         
     return vertices, mask
 
+"""
 def sample_nodes(vertices, mask, num_samples=None, mode='uniform', key=None):
-    """Stage 2: Select a subset of nodes based on sampling strategy."""
     batch_size, num_nodes = mask.shape
     device = vertices.device
     gen = key if isinstance(key, torch.Generator) else None
@@ -53,11 +54,106 @@ def sample_nodes(vertices, mask, num_samples=None, mode='uniform', key=None):
         
     return valid_nodes, batch_vec
 
+"""
+
+def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None):
+    """
+    Samples nodes from batches of vertices. 
+    Returns: 
+        valid_nodes: Tensor [Total_Sampled_Nodes, 3]
+        batch_vec: Tensor [Total_Sampled_Nodes]
+    """
+    batch_size = vertices.shape[0]
+    device = vertices.device
+    gen = key if isinstance(key, torch.Generator) else None
+    
+    selected_nodes_list = []
+    batch_vec_list = []
+
+    for i in range(batch_size):
+        # 1. Extract valid nodes for this batch
+        nodes = vertices[i, mask[i]]
+        num_available = nodes.size(0)
+
+        if num_available == 0:
+            continue
+
+        # num_samples=None -> keep all valid nodes (full-graph path)
+        n = num_available if num_samples is None else min(num_samples, num_available)
+
+        # 2. Sampling Logic
+        if num_samples is None or n >= num_available:
+            # Keep-all: no sub-sampling needed
+            idx = torch.arange(num_available, device=device)
+
+        elif mode == 'fps':
+            # Farthest Point Sampling: returns indices relative to the 'nodes' subset.
+            # random_start=False keeps sampling reproducible; slice to exact n.
+            idx = torch_cluster.fps(nodes, ratio=n / num_available, random_start=False)
+            idx = idx[:n]
+
+        elif mode == 'gaussian':
+            com = nodes.mean(dim=0)
+            dist = torch.norm(nodes - com, dim=1)
+            probs = torch.exp(-0.5 * (dist / (dist.std() + 1e-6))**2)
+            idx = torch.multinomial(probs, num_samples=n, replacement=False, generator=gen)
+            
+        else: # Uniform
+            rand_vals = torch.rand(num_available, device=device, generator=gen)
+            idx = torch.argsort(rand_vals, descending=True)[:n]
+
+        # 3. Collect results dynamically
+        selected = nodes[idx]
+        selected_nodes_list.append(selected)
+        batch_vec_list.append(torch.full((selected.size(0),), i, device=device))
+
+    # 4. Final concatenation ensures x.size(0) == batch_vec.numel()
+    return torch.cat(selected_nodes_list, dim=0), torch.cat(batch_vec_list, dim=0)
+
 def build_radius_graph(nodes, batch_vec, r_max=0.4):
     """Stage 3: Compute graph structure from node positions."""
     edge_index = radius_graph(nodes, r=r_max, batch=batch_vec, max_num_neighbors=128)
     return Data(pos=nodes, edge_index=edge_index, batch=batch_vec)
 
+def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_max=0.4):
+    """
+    Build the bipartite aggregation graph: every supernode gathers from the
+    full-graph nodes within ``r_max``. This is the supernode message-passing
+    structure (n_s supernodes aggregate their spatial neighbourhood).
+
+    edge_index convention (radius(x=full, y=super)):
+        edge_index[0] -> supernode (target / receiver) index into super_nodes
+        edge_index[1] -> full node (source / sender)  index into full_nodes
+
+    Returns a PyG ``Data`` describing the bipartite graph:
+        pos          : [S, D] supernode positions   (target / output nodes)
+        batch        : [S]    supernode batch vector
+        source_pos   : [F, D] full-graph positions   (source nodes)
+        source_batch : [F]    full-graph batch vector
+        edge_index   : [2, E] bipartite edges (row0=super, row1=full)
+    """
+    assert full_nodes.size(0) == full_batch.size(0), \
+        f"Mismatch: full_nodes {full_nodes.size(0)} != full_batch {full_batch.size(0)}"
+    assert super_nodes.size(0) == super_batch.size(0), \
+        f"Mismatch: super_nodes {super_nodes.size(0)} != super_batch {super_batch.size(0)}"
+
+    # radius(x=source, y=target): edges from full nodes (x) to supernodes (y).
+    edge_index = radius(
+        x=full_nodes,
+        y=super_nodes,
+        r=r_max,
+        batch_x=full_batch,
+        batch_y=super_batch,
+        max_num_neighbors=128,
+    )
+
+    return Data(
+        pos=super_nodes,
+        batch=super_batch,
+        source_pos=full_nodes,
+        source_batch=full_batch,
+        edge_index=edge_index,
+    )
 
 def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9, 
                              noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None):

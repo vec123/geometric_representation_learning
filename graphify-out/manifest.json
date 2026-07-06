@@ -1,0 +1,157 @@
+{
+  "config/root.py": {
+    "mtime": 1783094681.4645774,
+    "ast_hash": "9e473294fa8f019b96390d17c2de049d",
+    "semantic_hash": "9e473294fa8f019b96390d17c2de049d"
+  },
+  "scripts/test_group_equivariant_train.py": {
+    "mtime": 1783338206.7838082,
+    "ast_hash": "78216efce27da40ea8f4ede9a444c5d0",
+    "semantic_hash": "78216efce27da40ea8f4ede9a444c5d0"
+  },
+  "src/geometry/geometry_np.py": {
+    "mtime": 1782722305.2502632,
+    "ast_hash": "c92f428f19e7209ff2664f10fb6d7d60",
+    "semantic_hash": "c92f428f19e7209ff2664f10fb6d7d60"
+  },
+  "src/graphs/graphs.py": {
+    "mtime": 1783337470.8019803,
+    "ast_hash": "115036a5034cb8b4ff2dc3c9e3af924d",
+    "semantic_hash": "115036a5034cb8b4ff2dc3c9e3af924d"
+  },
+  "src/learning/layers/equivariant/Self_Spatial_layer.py": {
+    "mtime": 1783334945.4398663,
+    "ast_hash": "b126802ab128bc14ee61640bacdf98dd",
+    "semantic_hash": "b126802ab128bc14ee61640bacdf98dd"
+  },
+  "src/learning/logger/train_logs.py": {
+    "mtime": 1783335242.712827,
+    "ast_hash": "3aaef03fa07bd38695afe51da02b0c54",
+    "semantic_hash": "3aaef03fa07bd38695afe51da02b0c54"
+  },
+  "src/learning/losses/losses.py": {
+    "mtime": 1783089768.8313887,
+    "ast_hash": "02f3e1a978261991eb505a246c45f617",
+    "semantic_hash": "02f3e1a978261991eb505a246c45f617"
+  },
+  "src/learning/models/folding_decoder.py": {
+    "mtime": 1783093207.6407094,
+    "ast_hash": "2a973af85932ed4b3dd7b7bd2550532c",
+    "semantic_hash": "2a973af85932ed4b3dd7b7bd2550532c"
+  },
+  "src/learning/models/group_encoder.py": {
+    "mtime": 1783094157.244321,
+    "ast_hash": "49ec2c964d42af49cb2b06c29536eebb",
+    "semantic_hash": "49ec2c964d42af49cb2b06c29536eebb"
+  },
+  "src/learning/modules/equivariant/attention.py": {
+    "mtime": 1783335086.6825564,
+    "ast_hash": "8f585c4e7ed3e48aa5255c1c14de7bbc",
+    "semantic_hash": "8f585c4e7ed3e48aa5255c1c14de7bbc"
+  },
+  "src/learning/modules/equivariant/interaction.py": {
+    "mtime": 1783335374.1695971,
+    "ast_hash": "6d10e755dfff5d5a318be982612b15a5",
+    "semantic_hash": "6d10e755dfff5d5a318be982612b15a5"
+  },
+  "src/learning/modules/equivariant/layer_norm.py": {
+    "mtime": 1783337924.4282377,
+    "ast_hash": "8ae07bd5e68d12daab4bcae2e3406c79",
+    "semantic_hash": "8ae07bd5e68d12daab4bcae2e3406c79"
+  },
+  "src/learning/modules/transformers/attention.py": {
+    "mtime": 1783092049.5560415,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "src/learning/modules/transformers/perceiver.py": {
+    "mtime": 1783092055.4130905,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "src/learning/trainers/E3_end2end.py": {
+    "mtime": 1783338320.0529704,
+    "ast_hash": "0a01d5d018e7c61268c5134cc96f69a4",
+    "semantic_hash": "0a01d5d018e7c61268c5134cc96f69a4"
+  },
+  "src/transforms/group_transforms.py": {
+    "mtime": 1783091388.2369606,
+    "ast_hash": "000d2ec767f49e2eadb7af660a1a9a09",
+    "semantic_hash": "000d2ec767f49e2eadb7af660a1a9a09"
+  },
+  "src/transforms/padding.py": {
+    "mtime": 1783336517.310873,
+    "ast_hash": "3b99e59a6f56f55a4e183e161bfb80a1",
+    "semantic_hash": "3b99e59a6f56f55a4e183e161bfb80a1"
+  },
+  "src/vtk/convert.py": {
+    "mtime": 1783090474.059587,
+    "ast_hash": "c9f48883b68e2ee513066be943a5c917",
+    "semantic_hash": "c9f48883b68e2ee513066be943a5c917"
+  },
+  "src/vtk/create.py": {
+    "mtime": 1783337248.167132,
+    "ast_hash": "daadb51c4eac44affb3bb9881cfb0a37",
+    "semantic_hash": "daadb51c4eac44affb3bb9881cfb0a37"
+  },
+  "src/vtk/extract.py": {
+    "mtime": 1783094754.5129933,
+    "ast_hash": "8d4288abb43f96cc35d5887114e87735",
+    "semantic_hash": "8d4288abb43f96cc35d5887114e87735"
+  },
+  "src/vtk/fields.py": {
+    "mtime": 1783090421.9167893,
+    "ast_hash": "14bfd6eba6d3ab7007acb794609b1d0a",
+    "semantic_hash": "14bfd6eba6d3ab7007acb794609b1d0a"
+  },
+  "src/vtk/io.py": {
+    "mtime": 1783090451.6855721,
+    "ast_hash": "7b16bdabf41c5111ccf4954b396f51b1",
+    "semantic_hash": "7b16bdabf41c5111ccf4954b396f51b1"
+  },
+  "src/vtk/process.py": {
+    "mtime": 1783090576.03336,
+    "ast_hash": "ce681831992c95b483d58dc86961e791",
+    "semantic_hash": "ce681831992c95b483d58dc86961e791"
+  },
+  "tests/graphs/test_graphs.py": {
+    "mtime": 1783336924.8772964,
+    "ast_hash": "9153a0f499bb142d3418d5d1a7e5f897",
+    "semantic_hash": "9153a0f499bb142d3418d5d1a7e5f897"
+  },
+  "tests/group_transforms/test_group_transforms.py": {
+    "mtime": 1783095526.2616985,
+    "ast_hash": "066ae83b7cc400cfd038ff90b1b00b89",
+    "semantic_hash": "066ae83b7cc400cfd038ff90b1b00b89"
+  },
+  "tests/learning/test_equivariant.py": {
+    "mtime": 1783335784.0610113,
+    "ast_hash": "113789bec4508ab33986f0277e08214e",
+    "semantic_hash": "113789bec4508ab33986f0277e08214e"
+  },
+  "tests/learning/test_logger.py": {
+    "mtime": 1783335784.0576615,
+    "ast_hash": "97273cfc79842d6ea19e683bc92fa538",
+    "semantic_hash": "97273cfc79842d6ea19e683bc92fa538"
+  },
+  "tests/learning/test_losses.py": {
+    "mtime": 1783335784.0576615,
+    "ast_hash": "2f6164c325e6160d1080e15ce6f7032f",
+    "semantic_hash": "2f6164c325e6160d1080e15ce6f7032f"
+  },
+  "tests/learning/test_losses_new.py": {
+    "mtime": 1783335539.9968548,
+    "ast_hash": "2f6164c325e6160d1080e15ce6f7032f",
+    "semantic_hash": "2f6164c325e6160d1080e15ce6f7032f"
+  },
+  "tests/learning/test_models.py": {
+    "mtime": 1783335784.0576615,
+    "ast_hash": "e42a3449c4b17d0a125f2e2c2f69e586",
+    "semantic_hash": "e42a3449c4b17d0a125f2e2c2f69e586"
+  },
+  "tests/learning/test_trainers.py": {
+    "mtime": 1783335784.0610113,
+    "ast_hash": "15a557435e3f1e8e538653e3d28e685c",
+    "semantic_hash": "15a557435e3f1e8e538653e3d28e685c"
+  }
+}
