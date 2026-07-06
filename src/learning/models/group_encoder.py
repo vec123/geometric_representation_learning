@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch_geometric.nn import global_mean_pool
 from e3nn import o3
 from src.learning.layers.equivariant.Self_Spatial_layer import EquiLayer
+from src.learning.modules.equivariant.irreps_utils import scalar_features, vector_features
 
 class GroupEncoder(nn.Module):
     def __init__(self, latent_dim: int = 5, irreps_cfg: dict = None, verbose: bool = False):
@@ -15,7 +16,8 @@ class GroupEncoder(nn.Module):
         in_irreps_str = irreps_cfg.get("input_irreps", "1x0e")
         intermediate_irreps_str = irreps_cfg.get("intermediate_irreps", "32x0e + 32x0o + 16x1e + 16x1o")
         output_irreps_str = irreps_cfg.get("output_irreps", f"{latent_dim}x0e + 2x1o")
-        
+        self.out_irreps = o3.Irreps(output_irreps_str)
+
         self.layers = nn.ModuleList([
             EquiLayer(in_irreps=in_irreps_str, target_irreps=intermediate_irreps_str, verbose=verbose),
             EquiLayer(in_irreps=intermediate_irreps_str, target_irreps=intermediate_irreps_str, verbose=verbose),
@@ -36,18 +38,20 @@ class GroupEncoder(nn.Module):
 
         # 2. Global Pooling (VAE Latent Space)
         # Using invariant scalars for pooling
-        scalars = x.slice_by_irreps("0e").array
-        
+        scalars = scalar_features(x, self.out_irreps)          # [N, #0e]
+
         # Weighted mean pooling
         weights = torch.softmax(self.weight_net(scalars), dim=0)
         mu = global_mean_pool(weights * self.mu_net(scalars), batch_idx)
         logvar = torch.log(global_mean_pool(weights * self.var_net(scalars), batch_idx) + 1e-8)
-        
+
         # 3. Equivariant Output (Rotation & Translation)
-        vectors = x.slice_by_irreps("1o").array
-        # Weighted sum for rotation vectors
-        vec_graph = global_mean_pool(weights * vectors, batch_idx)
-        
+        vectors = vector_features(x, self.out_irreps, '1o')    # [N, n_vec, 3]
+        n_vec = vectors.shape[1]
+        # Weighted mean over nodes, per graph, then reshape back to [B, n_vec, 3].
+        vec_weighted = (weights.unsqueeze(-1) * vectors).reshape(vectors.shape[0], -1)
+        vec_graph = global_mean_pool(vec_weighted, batch_idx).reshape(-1, n_vec, 3)
+
         # Extract v1, v2 for rotation matrix (2 vectors -> 3x3 R)
         v1, v2 = vec_graph[:, 0, :], vec_graph[:, 1, :]
         rot_matrix = self.get_rotation_matrix_from_two_vectors(v1, v2)

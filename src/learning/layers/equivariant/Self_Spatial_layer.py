@@ -10,17 +10,18 @@ from src.learning.modules.equivariant.layer_norm import (
 )
 
 class EquiLayer(nn.Module):
-    def __init__(self, in_irreps, target_irreps, verbose=True):
+    def __init__(self, in_irreps, target_irreps, sh_lmax = 1, verbose=True):
         super().__init__()
         self.in_irreps = o3.Irreps(in_irreps)
         self.target_irreps = o3.Irreps(target_irreps)
+        self.sh_lmax = sh_lmax
         self.verbose = verbose
 
         # 1. Self Interaction
         self.self_int = SelfInteraction(
             in_irreps=self.in_irreps,
             target_irreps=self.target_irreps,
-            sh_lmax=1,
+            sh_lmax=self.sh_lmax,
             verbose=verbose
         )
 
@@ -28,7 +29,8 @@ class EquiLayer(nn.Module):
         self.spatial_conv = SpatialConvolution(
             in_irreps=self.target_irreps,
             target_irreps=self.target_irreps,
-            sh_lmax=1
+            sh_lmax=self.sh_lmax,
+            verbose=verbose
         )
 
         # 3. Residual Projection (if irreps mismatch)
@@ -58,20 +60,20 @@ class EquiLayer(nn.Module):
         
         if self.verbose:
             print("------Skip connection--------")
-            print("in_irreps: ", x.irreps)
-            print("msg.irreps: ", msg.irreps)
-            print("skip.irreps: ", skip.irreps)
-            print("res.irreps: ", res.irreps)
+            print("x.shape: ", x.shape)
+            print("msg.shape: ", msg.shape)
+            print("skip.shape: ", skip.shape)
+            print("res.shape: ", res.shape)
             print("-------Finished--------")
-            
+
         # Layer Norm
         h_norm = self.norm(res)
-        
+
         if self.verbose:
             print("--------------Layer --------------")
-            print("in.irreps : ", x.irreps)
-            print("msg.irreps : ", msg.irreps)
-            print("out.irreps: ", h_norm.irreps)
+            print("in.irreps : ", self.in_irreps)
+            print("target.irreps : ", self.target_irreps)
+            print("out.shape: ", h_norm.shape)
             print("------------Finished-------------")
             
         return h_norm

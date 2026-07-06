@@ -19,8 +19,13 @@ class EquivariantAttention(nn.Module):
         self.lin_v = o3.Linear(self.irreps_in + self.sh.irreps_out, self.irreps_out)
         
         # Dot product: maps to "0e" (scalar)
-        self.lin_dot = o3.Linear(self.irreps_out + self.irreps_out, "0e")
-
+        self.tp_attn = o3.FullyConnectedTensorProduct(
+            self.irreps_out, 
+            self.irreps_out, 
+            "0e", 
+            shared_weights=True # Set to False if you want unique weights per edge/node
+        )            
+        
     def forward(self, node_features, positions, senders, receivers, num_nodes):
         # 1. Geometry: Spherical Harmonics of relative positions
         rel_pos = positions[receivers] - positions[senders]
@@ -38,8 +43,7 @@ class EquivariantAttention(nn.Module):
         
         # 4. Attention mechanism
         # Q (receiver) and K (edge) are combined before dot product
-        attn_input = o3.tensor_product(q[receivers], k)
-        alpha_raw = self.lin_dot(attn_input)
+        alpha_raw = self.tp_attn(q[receivers], k)
         
         # Softmax normalized per receiver
         alpha = torch.zeros_like(alpha_raw)

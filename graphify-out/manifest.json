@@ -5,9 +5,9 @@
     "semantic_hash": "9e473294fa8f019b96390d17c2de049d"
   },
   "scripts/test_group_equivariant_train.py": {
-    "mtime": 1783338206.7838082,
-    "ast_hash": "78216efce27da40ea8f4ede9a444c5d0",
-    "semantic_hash": "78216efce27da40ea8f4ede9a444c5d0"
+    "mtime": 1783341744.899629,
+    "ast_hash": "f2f18c481da4ff633275818e9db5d820",
+    "semantic_hash": ""
   },
   "src/geometry/geometry_np.py": {
     "mtime": 1782722305.2502632,
@@ -15,9 +15,9 @@
     "semantic_hash": "c92f428f19e7209ff2664f10fb6d7d60"
   },
   "src/graphs/graphs.py": {
-    "mtime": 1783337470.8019803,
-    "ast_hash": "115036a5034cb8b4ff2dc3c9e3af924d",
-    "semantic_hash": "115036a5034cb8b4ff2dc3c9e3af924d"
+    "mtime": 1783341217.678356,
+    "ast_hash": "378c2ec3dadcbd07298762b871e68449",
+    "semantic_hash": ""
   },
   "src/learning/layers/equivariant/Self_Spatial_layer.py": {
     "mtime": 1783334945.4398663,
@@ -153,5 +153,10 @@
     "mtime": 1783335784.0610113,
     "ast_hash": "15a557435e3f1e8e538653e3d28e685c",
     "semantic_hash": "15a557435e3f1e8e538653e3d28e685c"
+  },
+  "tests/graphs/test_supernodes.py": {
+    "mtime": 1783341651.7596915,
+    "ast_hash": "2b109fcfc7d85aaf6adaffdea5876f8c",
+    "semantic_hash": ""
   }
 }

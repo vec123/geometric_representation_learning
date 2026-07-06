@@ -4,6 +4,15 @@ import torch.nn as nn
 from e3nn import o3
 
 
+def get_slice_for_irrep(irreps, target_ir):
+    # Iterate through the irreps to find the start/stop index
+    start = 0
+    for mul, ir in irreps:
+        if str(ir) == target_ir:
+            return slice(start, start + mul * ir.dim)
+        start += mul * ir.dim
+    return None
+
 
 class EquivariantLayerNorm(nn.Module):
     def __init__(self, irreps, eps=1e-5, affine=True, normalization='component', verbose=True):
@@ -22,11 +31,11 @@ class EquivariantLayerNorm(nn.Module):
             ])
 
     def forward(self, x):
-        # Assuming x is an IrrepsArray
+        # x: [N, irreps.dim] plain tensor laid out according to self.irreps.
         field_list = []
-        for i, (mul, ir) in enumerate(self.irreps):
-            field = x.slice_by_irreps(f"{mul}x{ir}")
-            field_reshaped = field.array.reshape(field.shape[0], mul, ir.dim)
+        for i, ((mul, ir), slice_idx) in enumerate(zip(self.irreps, self.irreps.slices())):
+            field = x[..., slice_idx]
+            field_reshaped = field.reshape(field.shape[0], mul, ir.dim)
 
             if ir.l == 0:
                 # --- SCALAR BRANCH ---
@@ -41,16 +50,13 @@ class EquivariantLayerNorm(nn.Module):
                     rms = torch.sqrt(sq.sum(dim=-1, keepdim=True) + self.eps)
                 else:
                     rms = torch.sqrt(sq.mean(dim=-1, keepdim=True) + self.eps)
-                
+
                 normed = field_reshaped / (rms + self.eps)
 
-            # --- AFFINE ---
+            # --- AFFINE: scale the NORMALIZED field by the learned per-mul gain ---
             if self.affine:
-                # Apply learned weight: (mul,) -> (1, mul, 1) for broadcasting
                 weight = self.affine_weights[i].view(1, mul, 1)
-                normed = field_reshaped * weight
-            else:
-                normed = field_reshaped
+                normed = normed * weight
 
             field_list.append(normed.reshape(field.shape[0], -1))
 
@@ -62,4 +68,4 @@ class EquivariantLayerNorm(nn.Module):
             print("Output shape: ", final_array.shape)
             print("--------------Finished --------------")
 
-        return o3.IrrepsArray(self.irreps, final_array)
+        return final_array

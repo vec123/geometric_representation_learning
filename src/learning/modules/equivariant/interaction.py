@@ -5,7 +5,10 @@ from e3nn import o3
 from torch_geometric.nn import MessagePassing
 from torch_scatter import scatter
 
-
+from src.learning.modules.equivariant.irreps_utils import (
+    scalar_features,
+    expand_per_irrep_gate,
+)
 
 class GatingBlock(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, out_dim: int):
@@ -21,63 +24,64 @@ class GatingBlock(nn.Module):
         x = self.dense2(x)
         
         return x
-    
+  
+
 class SelfInteraction(nn.Module):
-    def __init__(self, in_irreps, target_irreps, sh_lmax=4, verbose=True):
+    def __init__(self, in_irreps, target_irreps, sh_lmax = 1, verbose=True):
         super().__init__()
-        self.in_irreps = o3.Irreps(in_irreps)
+        # self.in_irreps = o3.Irreps(in_irreps)
+        self.in_irreps = self.limit_irreps(in_irreps, sh_lmax)
         self.target_irreps = o3.Irreps(target_irreps)
         self.sh_lmax = sh_lmax
         self.verbose = verbose
 
-        # 1. Tensor Product: V_i ⊗ V_i
-        # Using Full TensorProduct to combine features with themselves
+        # Tensor Product: V ⊗ V (equivariant self-interaction / "square").
         self.tp = o3.FullyConnectedTensorProduct(
-            self.in_irreps, self.in_irreps, 
-            self.in_irreps, # Output irreps restricted by logic if needed
-            shared_weights=False
+            self.in_irreps, self.in_irreps,
+            self.in_irreps,  # Output irreps of the interaction
+            internal_weights=True
         )
-        
-        # 2. Gating Block
-        # We need to know the number of scalars and norms to set up the gate
-        # This assumes your GatingBlock is defined for these dimensions
-        self.gate_net = GatingBlock(input_dim=32, hidden_dim=self.in_irreps.num_irreps, out_dim=self.in_irreps.num_irreps)
-        
-        # 3. Final Projection
-        self.linear_out = o3.Linear(self.in_irreps, self.target_irreps)
+
+        # Concatenated features V ⊕ (V ⊗ V); order preserved to match torch.cat.
+        self.concat_irreps = self.in_irreps + self.in_irreps
+
+        # MLP gating: one gate per irrep, computed from the invariant scalars.
+        self.num_scalars = self.concat_irreps.count("0e")
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(self.num_scalars, 64),
+            nn.SiLU(),
+            nn.Linear(64, self.concat_irreps.num_irreps)  # one gate per irrep
+        )
+
+        # Final Linear projection: (V ⊕ V⊗V) -> target.
+        self.linear_out = o3.Linear(self.concat_irreps, self.target_irreps)
+
+    def limit_irreps(self, irreps_str, max_l):
+        """Filters an irreps string to keep only l <= max_l."""
+        irreps = o3.Irreps(irreps_str)
+        filtered = [ir for ir in irreps if ir.ir.l <= max_l]
+        return o3.Irreps(filtered)
 
     def forward(self, node_features):
-        # 1. Tensor Product
-        # v_sq represents the squared interaction
-        v_sq = self.tp(node_features, node_features)
-        
-        # 2. Skip connection and Gating setup
-        # In PyTorch e3nn, we typically use o3.concatenate
-        v_intermediate = o3.concatenate([node_features, v_sq], dim=-1)
-        
-        # 3. Gating logic
-        scalars = v_intermediate.slice_by_irreps("0e")
-        vectors = v_intermediate.slice_by_irreps("1o")
-        v_lengths = vectors.norm() 
-        
-        gate_input = torch.cat([scalars.array, v_lengths.array], dim=-1)
-        gate = self.gate_net(gate_input)
-        
-        # Gating
-        gated = v_intermediate * gate
-        
-        # 4. Final Projection
-        v_out = self.linear_out(gated)
-        
+        # Step 1: V ⊗ V, then concatenate with V -> V ⊕ (V ⊗ V).
+        interaction = self.tp(node_features, node_features)
+        v_concat = torch.cat([node_features, interaction], dim=-1)
+
+        # Step 2: per-irrep gate from the invariant scalars (keeps equivariance).
+        scalars = scalar_features(v_concat, self.concat_irreps)
+        gate = torch.sigmoid(self.gate_mlp(scalars))
+        gate = expand_per_irrep_gate(gate, self.concat_irreps)
+        gated = v_concat * gate
+
+        # Step 3: linear projection to the target irreps.
+        out = self.linear_out(gated)
         if self.verbose:
             print("--------------SelfInteraction --------------")
             print("target_irreps: ", self.target_irreps)
-            print("in.irreps: ", node_features.irreps)
-            print("v_intermediate.irreps: ", v_intermediate.irreps)
-            print("v_out.irreps: ", v_out.irreps)
+            print("out.shape: ", out.shape)
             print("--------------Finished --------------")
-            
-        return v_out
+
+        return out
     
 
 class SpatialConvolution(MessagePassing):
@@ -91,49 +95,65 @@ class SpatialConvolution(MessagePassing):
         # Spherical Harmonics
         self.sh = o3.SphericalHarmonics([l for l in range(1, sh_lmax + 1)], normalize=True)
         
-        # Tensor Product for messages
-        self.tp = o3.FullyConnectedTensorProduct(self.in_irreps, self.sh.irreps_out, self.in_irreps)
-        
-        # Linear projection for message
-        self.lin_msg = o3.Linear(self.in_irreps + self.in_irreps, target_irreps)
-        
-        # Gating logic: takes scalars and norms
-        self.gate_net = GatingBlock(input_dim=32, hidden_dim=self.in_irreps.num_irreps, out_dim=self.in_irreps.num_irreps)
+        # Tensor Product for messages; weights supplied per-edge by the radial net.
+        self.tp = o3.FullyConnectedTensorProduct(
+            self.in_irreps, self.sh.irreps_out, self.in_irreps,
+            shared_weights=False, internal_weights=False,
+        )
+        self.num_weights = self.tp.weight_numel
+        # Radial network: message weights as a function of edge length (scalar -> weights).
+        self.weight_net = nn.Sequential(
+            nn.Linear(1, 16), nn.SiLU(), nn.Linear(16, self.num_weights)
+        )
+
+        # Message features x_j ⊕ (x_j ⊗ Y); order preserved to match torch.cat.
+        self.geo_irreps = self.in_irreps + self.in_irreps
+        self.lin_msg = o3.Linear(self.geo_irreps, target_irreps)
+
+        # Gating: one gate per message irrep, from sender + receiver invariant scalars.
+        self.num_scalars = self.in_irreps.count("0e")
+        self.gate_net = GatingBlock(
+            input_dim=2 * self.num_scalars,
+            hidden_dim=64,
+            out_dim=self.geo_irreps.num_irreps,
+        )
+
 
     def forward(self, x, pos, edge_index):
-        # 1. Compute Degrees: Count edges per node
-        # edge_index[1] contains the receiver indices
-        row, col = edge_index
-        degree = torch.ones(x.size(0), device=x.device)
-        degree = scatter(degree, row, reduce='add') # k = number of incoming edges
-        
-        # 2. Propagate
+        # 1. In-degree of each receiver node (edge_index[1]) for 1/k normalization.
+        _, col = edge_index
+        ones = torch.ones(col.size(0), device=x.device)
+        degree = scatter(ones, col, dim=0, dim_size=x.size(0), reduce='add')
+
+        # 2. Propagate (messages aggregated at the receivers).
         out = self.propagate(edge_index, x=x, pos=pos)
-        
-        # 3. Apply Normalization (1/k)
-        # Avoid division by zero for isolated nodes
+
+        # 3. Normalize by 1/k (per-node invariant scalar); guard isolated nodes.
         norm = 1.0 / torch.clamp(degree, min=1.0)
         if self.verbose:
             print("--------------SpatialConvolution --------------")
             print("target_irreps: ", self.target_irreps)
-            print("in.irreps: ", x.irreps)
-            print("out.irreps: ", out.irreps)
+            print("out.shape: ", out.shape)
             print("--------------Finished --------------")
-        return out * norm.view(-1, 1) # Scaling the aggregated features
+        return out * norm.view(-1, 1)  # Scaling the aggregated features
 
     def message(self, x_i, x_j, pos_i, pos_j):
         # x_j: sender features, x_i: receiver features
         rel_pos = pos_j - pos_i
+        dist = torch.norm(rel_pos, dim=-1, keepdim=True)
         edge_sh = self.sh(rel_pos)
-        
-        # Tensor Product path
-        tp_msg = self.tp(x_j, edge_sh)
-        geo_features = o3.concatenate([x_j, tp_msg], dim=-1)
-        
-        # Gating
-        gate_in = torch.cat([x_i.slice_by_irreps("0e").array, x_j.slice_by_irreps("0e").array], dim=-1)
-        gate = self.gate_net(gate_in)
-        
+
+        # Equivariant message: (x_j ⊗ Y) with radial weights, concatenated with x_j.
+        weights = self.weight_net(dist)
+        tp_msg = self.tp(x_j, edge_sh, weights)
+        geo_features = torch.cat([x_j, tp_msg], dim=-1)
+
+        # Per-irrep gate from sender + receiver invariant scalars (keeps equivariance).
+        x_i_0e = scalar_features(x_i, self.in_irreps)
+        x_j_0e = scalar_features(x_j, self.in_irreps)
+        gate = torch.sigmoid(self.gate_net(torch.cat([x_i_0e, x_j_0e], dim=-1)))
+        gate = expand_per_irrep_gate(gate, self.geo_irreps)
+
         return self.lin_msg(geo_features * gate)
 
     def update(self, aggr_out, x):
