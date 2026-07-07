@@ -1,0 +1,169 @@
+"""Equivariant GNN backbone + scalar self-attention + Perceiver latent readout.
+
+Pipeline (per graph in the batch):
+
+  1. EquiLayer GNN over the point graph            -> node features (mixed irreps)
+  2. Split off the invariant scalar (0e) channels  -> X in R^{n_nodes x n_scalar}
+  3. Multi-head self-attention transformer (nodes) -> R^{n_nodes x n_scalar}
+  4. Perceiver cross-attention with n_latent learned queries:
+         Q: (n_latent x d_shared)  <- learned latent array . W_Q
+         K: (n_nodes  x n_scalar)  . W_K -> (n_nodes x d_shared)
+         V: (n_nodes  x n_scalar)  . W_V -> (n_nodes x d_shared)
+     -> latent array  R^{n_latent x d_shared}   (d_shared == the latent dim)
+
+Two optional post-readout stages let the same encoder serve both decoder paths:
+
+  * ``reduce_stages`` — a PerceiverReducer that iteratively shrinks the token count,
+    e.g. ``[8, 4, 2]`` -> ... -> 2 (or -> 1). Use this to collapse toward a single
+    latent (or a mean/var pair) for the FoldingDecoder.
+  * ``vae_mode``      — a LatentVAEHead applied to whatever token set remains, turning
+    it into a sampled ``z`` + ``(mu, logvar, kl)`` regardless of token count. Leave
+    the token set large (no reduction) to feed a PerceiverDecoder.
+
+``forward`` returns an ``EncoderOutput``: ``latent`` is the (sampled) latent set; when
+a VAE head is active ``mu``/``logvar`` are set and ``aux['kl']`` / ``aux['latent_set']``
+carry the KL term and the pre-VAE tokens.
+
+Attention runs one graph at a time (indexed by ``batch``), so nodes only ever attend
+within their own shape and each shape gets its own latent array — no cross-shape
+leakage. Only the invariant scalar channels feed the readout, so the latent is
+rotation/translation invariant; the higher-order (l>0) channels are dropped here.
+"""
+
+import torch
+import torch.nn as nn
+from e3nn import o3
+
+from src.learning.layers.equivariant.Self_Spatial_layer import EquiLayer
+from src.learning.models.encoder_output import EncoderOutput
+from src.learning.modules.equivariant.irreps_utils import scalar_features
+from src.learning.modules.latent_vae import LatentVAEHead
+from src.learning.modules.transformers.perceiver_encoder import (
+    PerceiverEncoder,
+    PerceiverReducer,
+)
+from src.learning.modules.transformers.self_attention import SelfAttentionBlock
+
+
+class GroupPerceiverEncoder(nn.Module):
+    def __init__(
+        self,
+        irreps_cfg,
+        n_latent=16,
+        d_shared=32,
+        self_attn_heads=4,
+        cross_attn_heads=4,
+        n_self_layers=1,
+        widening_factor=2,
+        reduce_stages=None,
+        reduce_heads=4,
+        vae_mode=None,
+        sh_lmax=1,
+        interaction_sh_lmax=4,
+        n_perceiver_layers = 4,
+        perceiver_weight_sharing = True,
+        verbose=False,
+    ):
+        super().__init__()
+        self.verbose = verbose
+        self.perceiver_weight_sharing = perceiver_weight_sharing
+        self.n_latent = n_latent
+        self.d_shared = d_shared
+
+        in_irreps  = irreps_cfg.get("input_irreps", "1x0e")
+        mid_irreps = irreps_cfg.get("intermediate_irreps", "32x0e + 32x1o")
+        out_irreps = irreps_cfg.get("output_irreps", "16x0e + 2x1o")
+        self.out_irreps = o3.Irreps(out_irreps)
+
+        # Equivariant GNN backbone (same stack shape as GroupEncoder).
+        self.layers = nn.ModuleList([
+            EquiLayer(in_irreps=in_irreps,  target_irreps=out_irreps,
+                      spatial_sh_lmax=sh_lmax, interaction_sh_lmax=interaction_sh_lmax, verbose=verbose),
+        ])
+
+        # Number of invariant scalar channels the GNN emits (the transformer width).
+        n_scalar = self.out_irreps.count(o3.Irrep("0e"))
+        if n_scalar == 0:
+            raise ValueError(f"output_irreps '{out_irreps}' has no 0e channels; nothing to attend over.")
+        if n_scalar % self_attn_heads != 0:
+            raise ValueError(f"n_scalar ({n_scalar}) must be divisible by self_attn_heads ({self_attn_heads}).")
+        if d_shared % cross_attn_heads != 0:
+            raise ValueError(f"d_shared ({d_shared}) must be divisible by cross_attn_heads ({cross_attn_heads}).")
+        self.n_scalar = n_scalar
+
+        # Scalar self-attention transformer over the nodes (keeps width n_scalar).
+        # Standard pre-norm multi-head self-attention block (torch.nn.MultiheadAttention).
+        self.self_attn = nn.ModuleList([
+            SelfAttentionBlock(dim=n_scalar, num_heads=self_attn_heads, widening_factor=widening_factor)
+            for _ in range(n_self_layers)
+        ])
+
+        # Perceiver stack: n_latent learned queries cross-attend to node scalars.
+        # PerceiverLayer adds the query residual, so v_channels must equal d_shared.
+        self.latents = nn.Parameter(torch.randn(n_latent, d_shared) * 0.02)
+        if not self.perceiver_weight_sharing:
+            self.perceivers = nn.ModuleList([
+            PerceiverEncoder(
+                input_dim=n_scalar, latent_dim=d_shared,
+                qk_channels=d_shared, v_channels=d_shared,
+                num_heads=cross_attn_heads, widening_factor=widening_factor,
+            )
+            for _ in range(n_perceiver_layers)
+            ])
+        else:
+            self.perceiver = PerceiverEncoder(
+                    input_dim=n_scalar, latent_dim=d_shared,
+                    qk_channels=d_shared, v_channels=d_shared,
+                    num_heads=cross_attn_heads, widening_factor=widening_factor,
+                )
+            self.perceivers = nn.ModuleList([self.perceiver
+                                             for _ in range(n_perceiver_layers)
+            ])
+
+        # Optional: iteratively reduce the token count (n_latent -> ... -> reduce_stages[-1]).
+        self.reducer = None
+        if reduce_stages:
+            self.reducer = PerceiverReducer(
+                d_shared=d_shared, stages=list(reduce_stages),
+                num_heads=reduce_heads, widening_factor=widening_factor,
+            )
+
+        # Optional: VAE head over whatever token set remains (any token count).
+        self.vae = LatentVAEHead(d_shared, mode=vae_mode) if vae_mode else None
+
+    def forward(self, x, pos, edge_index, batch_idx):
+        # 1. GNN message passing.
+        for i, layer in enumerate(self.layers):
+            x = layer(x, pos, edge_index)
+            if self.verbose:
+                print(f"[GroupPerceiverEncoder] layer {i} out: {tuple(x.shape)}")
+
+        # Split off the invariant scalar channels.
+        scalars = scalar_features(x, self.out_irreps)          # [N_total, n_scalar]
+
+        # Run the transformer + Perceiver readout once per graph so nodes only
+        # attend within their own shape. Batch dim of 1 keeps the (B, N, C) attention
+        # ops happy without padding masks.
+        num_graphs = int(batch_idx.max().item()) + 1
+        out = []
+        for b in range(num_graphs):
+            nodes = scalars[batch_idx == b].unsqueeze(0)       # [1, N_b, n_scalar]
+            for block in self.self_attn:
+                nodes = block(nodes)                           # [1, N_b, n_scalar]
+            queries = self.latents.unsqueeze(0)                # [1, n_latent, d_shared]
+            latent = self.perceiver(nodes, queries)            # [1, n_latent, d_shared]
+            out.append(latent)
+
+        tokens = torch.cat(out, dim=0)                         # [B, n_latent, d_shared]
+
+        # Optional iterative reduction
+        if self.reducer is not None:
+            tokens = self.reducer(tokens)                      # [B, n_final, d_shared]
+
+        # Optional VAE head over the remaining token set.
+        if self.vae is not None:
+            z, mu, logvar, kl = self.vae(tokens)
+            return EncoderOutput(latent = z, mu=mu, logvar=logvar,
+                                 aux={"kl": kl, "latent_set": tokens})
+
+        return EncoderOutput(latent=tokens)

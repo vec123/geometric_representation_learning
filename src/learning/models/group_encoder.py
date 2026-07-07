@@ -4,6 +4,7 @@ from torch_geometric.nn import global_mean_pool
 from e3nn import o3
 from src.learning.layers.equivariant.Self_Spatial_layer import EquiLayer
 from src.learning.modules.equivariant.irreps_utils import scalar_features, vector_features
+from src.learning.models.encoder_output import EncoderOutput
 
 class GroupEncoder(nn.Module):
     def __init__(self, latent_dim: int = 5, 
@@ -58,7 +59,7 @@ class GroupEncoder(nn.Module):
             if self.verbose:
                 print(f"Layer {i} output shape: {x.shape}")
 
-        # 2. Global Pooling (VAE Latent Space)
+        #  Global Pooling (VAE Latent Space)
         # Using invariant scalars for pooling
         scalars = scalar_features(x, self.out_irreps)          # [N, #0e]
 
@@ -72,7 +73,7 @@ class GroupEncoder(nn.Module):
         mu = global_mean_pool(weights * self.mu_net(scalars), batch_idx, size=num_graphs)
         logvar = torch.log(global_mean_pool(weights * self.var_net(scalars), batch_idx, size=num_graphs) + 1e-8)
 
-        # 3. Equivariant Output (Rotation & Translation)
+        #  Equivariant Output (Rotation & Translation)
         vectors = vector_features(x, self.out_irreps, '1o')    # [N, n_vec, 3]
         n_vec = vectors.shape[1]
         # Weighted mean over nodes, per graph, then reshape back to [B, n_vec, 3].
@@ -86,7 +87,12 @@ class GroupEncoder(nn.Module):
         # Translation: center of mass
         transl = global_mean_pool(pos, batch_idx, size=num_graphs)
         
-        return (mu, logvar), rot_matrix, vec_graph, transl
+        #return (mu, logvar), rot_matrix, vec_graph, transl
+        return EncoderOutput( mu=mu, 
+                             logvar=logvar, 
+                             rotation=rot_matrix, 
+                             translation=transl)
+    
 
     def get_rotation_matrix_from_two_vectors(self, v1, v2):
         u = v1 / (torch.norm(v1, dim=-1, keepdim=True) + 1e-8)

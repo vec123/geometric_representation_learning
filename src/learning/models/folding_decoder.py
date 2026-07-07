@@ -47,11 +47,20 @@ class FoldingDecoder(nn.Module):
         return encoded.view(coords.shape[0], coords.shape[1], -1)
 
     def forward(self, latent, manual_inv=False):
+        # latent: [B, 1, D] -- one D-dimensional latent vector per sample. A plain
+        # [B, D] is promoted to [B, 1, D] for backward compatibility.
+        if latent.dim() == 2:
+            latent = latent.unsqueeze(1)
+        if latent.shape[1] != 1:
+            raise ValueError(
+                f"FoldingDecoder expects a single latent per sample ([B, 1, D]); got "
+                f"{latent.shape[1]} tokens. Reduce/pool the latent set to one token first."
+            )
         batch_size = latent.shape[0]
-        
+
         latent_raw = torch.zeros_like(latent) if manual_inv else latent
-        latent_tiled = latent_raw.unsqueeze(1).expand(-1, self.num_samples, -1)
-        
+        latent_tiled = latent_raw.expand(-1, self.num_samples, -1)   # [B, num_samples, D]
+
         # Create grid
         u = torch.linspace(-1, 1, self.grid_size, device=latent.device)
         v = torch.linspace(-1, 1, self.grid_size, device=latent.device)

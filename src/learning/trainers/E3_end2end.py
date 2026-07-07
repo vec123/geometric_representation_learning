@@ -35,14 +35,11 @@ class TrainingStepper:
         ``return self.encoder(graph)`` and any encoder becomes drop-in. This is the
         single seam that couples the trainer to the encoder's current signature.
         """
-        (mu, logvar), rotation, vectors, translation = self.encoder(
+        out = self.encoder(
             graph.x, graph.pos, graph.edge_index, graph.batch
         )
-        return EncoderOutput(
-            mu=mu, logvar=logvar,
-            rotation=rotation, translation=translation,
-            aux={"vectors": vectors},
-        )
+        assert isinstance(out, EncoderOutput)
+        return out    
 
     def train_step(self, graph, true_verts, padding_mask):
         graph = graph.to(self.device)
@@ -65,8 +62,9 @@ class TrainingStepper:
             )
 
         loss = combined_surface_loss(pred, true_verts, padding_mask)
-        if self.kl_weight:
-            loss = loss + self.kl_weight * kl_divergence_loss(enc.mu, enc.logvar)
+        kl = enc.kl()
+        if kl is not None and self.kl_weight:
+            loss = loss + self.kl_weight * kl
 
         # A non-finite loss (e.g. NaN gradients from cdist at coincident points) would
         # otherwise train silently to all-NaN weights and write NaN VTPs without error.
