@@ -77,10 +77,11 @@ class SelfInteraction(nn.Module):
         out = self.linear_out(gated)
         if self.verbose:
             print("--------------SelfInteraction --------------")
+            print("in_irreps: ", self.in_irreps)
             print("target_irreps: ", self.target_irreps)
             print("out.shape: ", out.shape)
+            print("self.linear_out.irreps_out: ", self.linear_out.irreps_out)
             print("--------------Finished --------------")
-
         return out
     
 
@@ -134,6 +135,7 @@ class SpatialConvolution(MessagePassing):
             print("--------------SpatialConvolution --------------")
             print("target_irreps: ", self.target_irreps)
             print("out.shape: ", out.shape)
+            print("self.lin_msg.irreps_out: ", self.lin_msg.irreps_out)
             print("--------------Finished --------------")
         return out * norm.view(-1, 1)  # Scaling the aggregated features
 

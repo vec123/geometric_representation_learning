@@ -20,9 +20,9 @@
     "semantic_hash": ""
   },
   "src/learning/layers/equivariant/Self_Spatial_layer.py": {
-    "mtime": 1783334945.4398663,
-    "ast_hash": "b126802ab128bc14ee61640bacdf98dd",
-    "semantic_hash": "b126802ab128bc14ee61640bacdf98dd"
+    "mtime": 1783346094.915032,
+    "ast_hash": "0458c9e8a54c0d36a69368b94cb2c6b1",
+    "semantic_hash": ""
   },
   "src/learning/logger/train_logs.py": {
     "mtime": 1783335242.712827,
@@ -40,24 +40,24 @@
     "semantic_hash": "2a973af85932ed4b3dd7b7bd2550532c"
   },
   "src/learning/models/group_encoder.py": {
-    "mtime": 1783094157.244321,
-    "ast_hash": "49ec2c964d42af49cb2b06c29536eebb",
-    "semantic_hash": "49ec2c964d42af49cb2b06c29536eebb"
+    "mtime": 1783346019.6205716,
+    "ast_hash": "5d6ee8f583f9d945d232e590f309f864",
+    "semantic_hash": ""
   },
   "src/learning/modules/equivariant/attention.py": {
-    "mtime": 1783335086.6825564,
-    "ast_hash": "8f585c4e7ed3e48aa5255c1c14de7bbc",
-    "semantic_hash": "8f585c4e7ed3e48aa5255c1c14de7bbc"
+    "mtime": 1783344162.200529,
+    "ast_hash": "eadc1cbe7d48c48b7acf997c2b046055",
+    "semantic_hash": ""
   },
   "src/learning/modules/equivariant/interaction.py": {
-    "mtime": 1783335374.1695971,
-    "ast_hash": "6d10e755dfff5d5a318be982612b15a5",
-    "semantic_hash": "6d10e755dfff5d5a318be982612b15a5"
+    "mtime": 1783345937.4140995,
+    "ast_hash": "d0cf724d66dae05dd19e3b289a8d30ff",
+    "semantic_hash": ""
   },
   "src/learning/modules/equivariant/layer_norm.py": {
-    "mtime": 1783337924.4282377,
-    "ast_hash": "8ae07bd5e68d12daab4bcae2e3406c79",
-    "semantic_hash": "8ae07bd5e68d12daab4bcae2e3406c79"
+    "mtime": 1783345785.2054043,
+    "ast_hash": "c4778a442ec9fb62126a70eac1a1c29b",
+    "semantic_hash": ""
   },
   "src/learning/modules/transformers/attention.py": {
     "mtime": 1783092049.5560415,
@@ -145,9 +145,9 @@
     "semantic_hash": "2f6164c325e6160d1080e15ce6f7032f"
   },
   "tests/learning/test_models.py": {
-    "mtime": 1783335784.0576615,
-    "ast_hash": "e42a3449c4b17d0a125f2e2c2f69e586",
-    "semantic_hash": "e42a3449c4b17d0a125f2e2c2f69e586"
+    "mtime": 1783342736.9569414,
+    "ast_hash": "e6fce5fa28e1f56cda86cd8a4735bad9",
+    "semantic_hash": ""
   },
   "tests/learning/test_trainers.py": {
     "mtime": 1783335784.0610113,
@@ -157,6 +157,21 @@
   "tests/graphs/test_supernodes.py": {
     "mtime": 1783341651.7596915,
     "ast_hash": "2b109fcfc7d85aaf6adaffdea5876f8c",
+    "semantic_hash": ""
+  },
+  "src/learning/modules/equivariant/irreps_utils.py": {
+    "mtime": 1783345767.017028,
+    "ast_hash": "4dd550448ccaf688d035054c1ad47bb5",
+    "semantic_hash": ""
+  },
+  "tests/learning/test_equivariant_modules.py": {
+    "mtime": 1783343033.7731206,
+    "ast_hash": "c530232f94d8e77d4907f175b9781e61",
+    "semantic_hash": ""
+  },
+  "tests/learning/test_trainer_e2e.py": {
+    "mtime": 1783346537.010406,
+    "ast_hash": "d7acfea2aed702f78d55628c004592ce",
     "semantic_hash": ""
   }
 }

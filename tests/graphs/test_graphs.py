@@ -25,7 +25,7 @@ OUTPUT_DIR = os.path.join(Project_ROOT, "tests", "output_data")
 
 # Step 1: Load the shape vertices from the VTP files
 shape_vertices = []
-for name in ["sample_01", "nose_0"]:
+for name in ["nose_0", "nose_1", "nose_2", "nose_3"]:
     vtp_path = os.path.join(Project_ROOT, "tests", "data", f"{name}.vtp")
     vtp = load_vtp(vtp_path)
     vertices, cells = extract_vtp_points_cells(vtp)
@@ -35,17 +35,17 @@ for name in ["sample_01", "nose_0"]:
 
 shape_vertices, shape_mask = pad_vertex_list(shape_vertices)
 shape_mask = torch.tensor(shape_mask, dtype=torch.bool)
-for i, num_samples in enumerate([None, 20]):
+for i, num_samples in enumerate([None, 100]):
     key = torch.Generator(device='cpu')  # or 'cuda'
     key.manual_seed(i)
 
-    sampling_mode = 'uniform'
+    sampling_mode = 'fps'
     print("shape_vertices.shape: ", shape_vertices.shape)
     graph = get_graphs_from_vertices(shape_vertices,
                                           masks=shape_mask,
                                           r_max=0.1, 
                                           dropout_rate=None, 
-                                          noise_std=0.05,
+                                          noise_std=0.00,
                                           key = key,
                                           sampling_mode=sampling_mode,
                                           num_samples = num_samples)
@@ -62,7 +62,8 @@ for i, num_samples in enumerate([None, 20]):
 
         V,E = get_individual_graph(graph, index=0)
         V = V.detach().cpu().numpy().astype(np.float32)
-        E = E.T.detach().cpu().numpy().astype(np.int64)
+        # get_individual_graph already returns local (M, 2) edges — no transpose.
+        E = E.detach().cpu().numpy().astype(np.int64)
 
         print("sampled vertices: ", V.shape)
         graph_vtp = create_polydata_w_lines(V, E)

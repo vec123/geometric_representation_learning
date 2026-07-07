@@ -30,10 +30,14 @@ def save_vtp(polydata, vtk_path, binary=True):
     if binary:
         # For XML files, 'binary' is the default and is handled automatically.
         # You can specify the data mode if needed:
-        writer.SetDataModeToAppended() 
+        writer.SetDataModeToAppended()
         writer.SetCompressorTypeToZLib() # Optional: compresses the file
     else:
         writer.SetDataModeToAscii()
-        
-    return writer.Write() == 1
+
+    # vtkXMLPolyDataWriter.Write() returns 0 on failure WITHOUT raising, so an ignored
+    # return value turns a failed write into a silent no-op. Raise so callers can't miss it.
+    if writer.Write() != 1:
+        raise IOError(f"vtkXMLPolyDataWriter failed to write {vtk_path}")
+    return True
 

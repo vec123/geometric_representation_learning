@@ -8,11 +8,13 @@ if ROOT not in sys.path:
 
 from src.vtk.io import save_vtp, load_vtp
 from src.vtk.extract import extract_vtp_points_cells
-from src.vtk.create import create_polydata_w_lines
+from src.vtk.fields import add_point_field
+from src.vtk.create import create_polydata_w_lines, create_polydata
 from src.graphs.graphs import (
     get_graphs_from_vertices,
-    sample_nodes,
-    build_bipartite_graph
+    build_super_graph,
+    get_individual_graph,
+    get_bipartite_graph
 )
 from src.transforms.padding import pad_vertex_list
 from config.root import get_project_root
@@ -44,37 +46,8 @@ def save_graph_as_vtp(graph, batch_idx, output_dir, filename_suffix):
     save_vtp(create_polydata_w_lines(pos, edges), save_path)
 
 
-def save_bipartite_as_vtp(graph, batch_idx, output_dir, filename_suffix):
-    """Saves one shape's supernode aggregation: full nodes + supernodes joined by the
-    bipartite edges each supernode aggregates over.
 
-    The bipartite ``Data`` carries two node sets (``source_pos``/``source_batch`` for
-    the full graph and ``pos``/``batch`` for the supernodes); we merge them into a
-    single point cloud so the aggregation edges can be rendered as VTP lines.
-    """
-    # Source (full-graph) nodes for this shape.
-    src_mask = (graph.source_batch == batch_idx)
-    src_pos = graph.source_pos[src_mask]
-    src_start = src_mask.nonzero(as_tuple=True)[0][0]
 
-    # Target (super) nodes for this shape.
-    tgt_mask = (graph.batch == batch_idx)
-    tgt_pos = graph.pos[tgt_mask]
-    tgt_start = tgt_mask.nonzero(as_tuple=True)[0][0]
-
-    # Edges whose supernode (row 0) belongs to this shape, remapped to local indices.
-    ei = graph.edge_index
-    edge_mask = tgt_mask[ei[0]]
-    e_super = ei[0, edge_mask] - tgt_start          # local supernode index
-    e_full = ei[1, edge_mask] - src_start           # local full-node index
-
-    # Combined point set [full ; super]; supernode indices are offset by n_full.
-    n_full = src_pos.size(0)
-    points = torch.cat([src_pos, tgt_pos], dim=0).detach().cpu().numpy()
-    lines = torch.stack([e_full, e_super + n_full], dim=0).T.detach().cpu().numpy()
-
-    save_path = os.path.join(output_dir, f"graph_{batch_idx}_{filename_suffix}.vtp")
-    save_vtp(create_polydata_w_lines(points, lines), save_path)
 
 
 def main():
@@ -82,33 +55,49 @@ def main():
     OUTPUT_DIR = os.path.join(Project_ROOT, "tests", "output_data")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 1. Load shapes into a padded [B, N, 3] tensor + validity mask.
-    vertices, mask = load_shapes(["sample_01", "nose_0"], Project_ROOT)
+    #  Load shapes into a padded [B, N, 3] tensor + validity mask.
+    samples = ["sample_01", "nose_0"]
+    samples =["nose_0"]
+    vertices, mask = load_shapes(samples, Project_ROOT)
     print(f"Loaded vertices shape: {vertices.shape}, mask shape: {mask.shape}")
 
-    # 2. Full graph: radius graph over all valid nodes. No dropout/noise here so the
+    # Full graph: radius graph over all valid nodes. No dropout/noise here so the
     #    supernodes sampled below share the same coordinate space; pass a dropout_rate
     #    to get_graphs_from_vertices to decimate the graph before construction.
     full_graph = get_graphs_from_vertices(
-        vertices, masks=mask, r_max=0.1, dropout_rate=0.8, noise_std=0.0
+        vertices, masks=mask, r_max=0.4, dropout_rate=0.0, noise_std=0.0
     )
     print(f"Full graph has {full_graph.num_nodes} nodes and {full_graph.num_edges} edges.")
 
-    # 3. Supernodes: draw n_s well-spread nodes per shape via farthest-point sampling.
-    super_nodes, super_batch = sample_nodes(vertices, mask, num_samples=50, mode='fps')
+    # Supernodes: draw n_s well-spread nodes per shape via farthest-point sampling.
 
-    # 4. Bipartite aggregation graph: each supernode gathers the full-graph nodes within
-    #    r_max (the neighbourhood a supernode aggregates through the GNN).
-    super_graph = build_bipartite_graph(
-        full_graph.pos, full_graph.batch, super_nodes, super_batch, r_max=0.2
-    )
+    super_graph = build_super_graph(vertices, mask, full_graph, num_samples=50)
     print(f"Supernode graph has {super_graph.pos.shape[0]} supernodes and "
           f"{super_graph.edge_index.shape[1]} aggregation edges.")
 
-    # 5. Inspection: one VTP per shape for both the full graph and the supernode graph.
-    for j in range(vertices.shape[0]):
-        save_graph_as_vtp(full_graph, j, OUTPUT_DIR, "full")
-        save_bipartite_as_vtp(super_graph, j, OUTPUT_DIR, "supernodes")
+    # Inspection: one VTP per shape for both the full graph and the supernode graph.
+    #for j in range(vertices.shape[0]):
+
+    for sample_idx in range( len(torch.unique(super_graph.batch)) ):
+            pos, edges = get_individual_graph(super_graph, sample_idx)
+            save_path = os.path.join(OUTPUT_DIR, f"super_graph_{sample_idx}.vtp")
+            vtp = create_polydata_w_lines(pos, edges)
+            save_vtp(vtp, save_path)
+
+            pos, edges, node_field = get_bipartite_graph(super_graph, sample_idx)  
+            save_path = os.path.join(OUTPUT_DIR, f"bipar_super_graph_{sample_idx}.vtp")
+            vtp = create_polydata_w_lines(pos, edges)
+            vtp = add_point_field(vtp, field_data=node_field,  field_name="super_node")
+            save_vtp(vtp, save_path)
+
+    for sample_idx in range( len(torch.unique(full_graph.batch)) ):
+            pos, edges = get_individual_graph(full_graph, sample_idx)
+            save_path = os.path.join(OUTPUT_DIR, f"full_graph_{sample_idx}.vtp")
+            vtp = create_polydata(pos)
+            save_vtp(vtp, save_path)
+
+        #save_graph_as_vtp(full_graph, j, OUTPUT_DIR, "full")
+        #save_bipartite_as_vtp(super_graph, j, OUTPUT_DIR, "supernodes")
 
     print(f"Inspection files saved to {OUTPUT_DIR}")
 

@@ -26,35 +26,6 @@ def apply_noise_and_masking(vertices, masks=None, noise_std=0.0, dropout_rate=0.
         
     return vertices, mask
 
-"""
-def sample_nodes(vertices, mask, num_samples=None, mode='uniform', key=None):
-    batch_size, num_nodes = mask.shape
-    device = vertices.device
-    gen = key if isinstance(key, torch.Generator) else None
-    
-    if num_samples is None:
-        # Keep all valid nodes
-        node_list = [vertices[i, mask[i]] for i in range(batch_size)]
-        valid_nodes = torch.cat(node_list, dim=0)
-        batch_vec = torch.cat([torch.full((len(nodes),), i, device=device) for i, nodes in enumerate(node_list)], dim=0)
-    else:
-        # Fixed-size sampling
-        if mode == 'gaussian':
-            # Assumes logic for probability distribution mapping is implemented here
-            probs = torch.ones((batch_size, num_nodes), device=device) 
-            keep_indices = torch.multinomial(probs, num_samples=num_samples, replacement=False, generator=gen)
-        else: # Uniform
-            rand_vals = torch.rand((batch_size, num_nodes), device=device, generator=gen)
-            rand_vals = torch.where(mask, rand_vals, torch.tensor(-1.0, device=device))
-            keep_indices = torch.argsort(rand_vals, dim=1, descending=True)[:, :num_samples]
-            
-        batch_idx = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, num_samples)
-        valid_nodes = vertices[batch_idx, keep_indices].reshape(-1, vertices.shape[-1])
-        batch_vec = batch_idx.reshape(-1)
-        
-    return valid_nodes, batch_vec
-
-"""
 
 def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None):
     """
@@ -110,9 +81,26 @@ def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None):
     # 4. Final concatenation ensures x.size(0) == batch_vec.numel()
     return torch.cat(selected_nodes_list, dim=0), torch.cat(batch_vec_list, dim=0)
 
-def build_radius_graph(nodes, batch_vec, r_max=0.4):
-    """Stage 3: Compute graph structure from node positions."""
-    edge_index = radius_graph(nodes, r=r_max, batch=batch_vec, max_num_neighbors=128)
+
+def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mode = "fps"):
+    super_nodes, super_batch = sample_nodes(vertices, mask, num_samples=num_samples, mode=mode)
+
+    # 4. Bipartite aggregation graph: each supernode gathers the full-graph nodes within
+    #    r_max (the neighbourhood a supernode aggregates through the GNN).
+    super_graph = build_bipartite_graph(
+            full_graph.pos, full_graph.batch, super_nodes, super_batch, r_max=r_max
+    )
+    return super_graph
+    
+def build_radius_graph(nodes, batch_vec, r_max=0.4, max_num_neighbors=256):
+    """Stage 3: Compute graph structure from node positions.
+
+    ``max_num_neighbors`` caps the degree per node: any node with more than this
+    many neighbours within ``r_max`` gets its edge list SILENTLY TRUNCATED, so the
+    result is no longer a true r-ball graph. Keep it comfortably above the densest
+    expected neighbourhood (raise it if you see suspiciously uniform degrees).
+    """
+    edge_index = radius_graph(nodes, r=r_max, batch=batch_vec, max_num_neighbors=max_num_neighbors)
     return Data(pos=nodes, edge_index=edge_index, batch=batch_vec)
 
 def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_max=0.4):
@@ -155,9 +143,10 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
         edge_index=edge_index,
     )
 
-def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9, 
-                             noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None):
-    
+def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9,
+                             noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None,
+                             max_num_neighbors=256):
+
     if dropout_rate is not None and num_samples is not None:
         raise ValueError("Please provide either dropout_rate or num_samples, not both.")
     if isinstance(masks, np.ndarray):
@@ -173,36 +162,91 @@ def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rat
     nodes, batch_vec = sample_nodes(v, mask, num_samples, sampling_mode, key)
     
     #  Build Graph
-    graph = build_radius_graph(nodes, batch_vec, r_max)
+    graph = build_radius_graph(nodes, batch_vec, r_max, max_num_neighbors=max_num_neighbors)
 
 
     return graph
 
 def get_individual_graph(batch_obj, index):
     """
-    Extracts a single graph from a PyG Batch object correctly.
+    Extract a single (homogeneous) graph from a PyG Batch object.
+
+    Returns:
+        V : (N_i, D)  node positions for shape ``index``
+        E : (M_i, 2)  edges as [src, dst] pairs, remapped to LOCAL 0..N_i-1 indices.
+
+    The (M, 2) local-index convention matches ``create_polydata_w_lines`` and
+    ``get_bipartite_graph``; callers must NOT transpose or offset the result.
     """
     # 1. Mask for nodes belonging to this graph
     node_mask = (batch_obj.batch == index)
     V = batch_obj.pos[node_mask]
 
-    # 2. Extract edges where the source node belongs to the current graph
-    # batch_obj.edge_index is (2, total_edges)
-    # batch_obj.batch[batch_obj.edge_index[0]] tells us which graph each edge belongs to
+    # 2. Extract edges where the source node belongs to the current graph.
+    #    batch_obj.edge_index is (2, total_edges); for a homogeneous radius graph
+    #    both endpoints of an in-shape edge live in the same shape.
     edge_mask = (batch_obj.batch[batch_obj.edge_index[0]] == index)
+    E = batch_obj.edge_index[:, edge_mask]                      # (2, M) GLOBAL indices
+
+    # 3. Remap global node indices -> local 0..N_i-1 so E references V directly.
+    #    A scatter table handles non-contiguous node sets (e.g. dropout-decimated
+    #    batches) that a plain ``- start_idx`` offset would get wrong. Sizing off the
+    #    indices actually present (not batch_obj.num_nodes, which is ambiguous for a
+    #    bipartite Data) keeps this well-defined even when misused on a bipartite graph;
+    #    endpoints outside this shape simply map to -1 (visibly wrong, never OOB).
+    node_indices = torch.nonzero(node_mask, as_tuple=False).flatten()
+    size = int(node_indices.max().item()) + 1 if node_indices.numel() else 0
+    if E.numel():
+        size = max(size, int(E.max().item()) + 1)
+    remap = torch.full((size,), -1, dtype=torch.long, device=E.device)
+    remap[node_indices] = torch.arange(node_indices.numel(), device=E.device)
+    E_local = remap[E].t().contiguous()                        # (M, 2) LOCAL indices
+
+    return V, E_local
+
+def get_bipartite_graph(graph, batch_idx):
+    """Saves one shape's supernode aggregation: full nodes + supernodes joined by the
+    bipartite edges each supernode aggregates over.
+
+    The bipartite ``Data`` carries two node sets (``source_pos``/``source_batch`` for
+    the full graph and ``pos``/``batch`` for the supernodes); we merge them into a
+    single point cloud so the aggregation edges can be rendered as VTP lines.
+    """
+    # Source (full-graph) nodes for this shape.
+    src_mask = (graph.source_batch == batch_idx)
+    src_pos = graph.source_pos[src_mask]
+    src_start = src_mask.nonzero(as_tuple=True)[0][0]
+
+    # Target (super) nodes for this shape.
+    tgt_mask = (graph.batch == batch_idx)
+    tgt_pos = graph.pos[tgt_mask]
+    tgt_start = tgt_mask.nonzero(as_tuple=True)[0][0]
+
+    # Edges whose supernode (row 0) belongs to this shape, remapped to local indices.
+    ei = graph.edge_index
+    edge_mask = tgt_mask[ei[0]]
+    e_super = ei[0, edge_mask] - tgt_start          # local supernode index
+    e_full = ei[1, edge_mask] - src_start           # local full-node index
+
+    # Combined point set [full ; super]; supernode indices are offset by n_full.
+    n_full = src_pos.size(0)
+    points = torch.cat([src_pos, tgt_pos], dim=0).detach().cpu().numpy()
+    lines = torch.stack([e_full, e_super + n_full], dim=0).T.detach().cpu().numpy()
+
+
+    n_full = src_pos.size(0)
+    n_super = tgt_pos.size(0) # Need this to create the field
     
-    # Filter the edge_index
-    E = batch_obj.edge_index[:, edge_mask]
+    points = torch.cat([src_pos, tgt_pos], dim=0).detach().cpu().numpy()
+    lines = torch.stack([e_full, e_super + n_full], dim=0).T.detach().cpu().numpy()
     
-    # OPTIONAL: Remap node indices in E to be 0-indexed relative to the new graph
-    # If your downstream tools expect V to be index 0 to N-1
-    node_indices = torch.nonzero(node_mask).flatten()
-    mapping = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(node_indices)}
-    
-    # Adjust E if necessary (only if downstream code requires local indexing)
-    # If not, you can return V and E as is.
-    
-    return V, E
+    # Create the field: 0 for source nodes, 1 for supernodes
+    # Using float32 or int32; Paraview handles both well for coloring
+    node_type = np.zeros(n_full + n_super, dtype=np.int32)
+    node_type[n_full:] = 1
+
+    return points, lines, node_type
+
 """ 
 def get_individual_graph(batch_obj, index):
 
@@ -215,6 +259,7 @@ def get_individual_graph(batch_obj, index):
     E = batch_obj.edge_index[:, edge_mask]
     return V,E
 """
+
 def get_vertices_and_edges(individual_graph):
     """
     Extracts vertices and edges from a single PyG Data object.

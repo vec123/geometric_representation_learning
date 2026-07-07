@@ -8,8 +8,8 @@ contract a working training step must satisfy:
     * the orchestrator drives the stepper once per step and logs / checkpoints /
       visualizes at the configured cadence.
 
-The trainer hardcodes ``.cuda()``; we neutralize that so the logic runs on CPU
-deterministically (and note it as a portability smell). Run with pytest, or:
+The stepper takes a ``device`` argument; these tests pass ``device='cpu'`` so the
+logic runs deterministically regardless of hardware. Run with pytest, or:
     python tests/learning/test_trainer_e2e.py
 """
 
@@ -18,16 +18,10 @@ import sys
 import math
 
 import torch
-import torch.nn as nn
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
-
-# The trainer moves modules to GPU in __init__ (encoder.cuda()); make that a no-op so
-# these tests run on CPU regardless of hardware. (The trainer should really take a
-# `device` argument instead of hardcoding cuda.)
-nn.Module.cuda = lambda self: self  # noqa: E305
 
 from torch_geometric.data import Data
 
@@ -75,7 +69,7 @@ def make_models():
 # --------------------------------------------------------------------------- #
 def test_training_step_returns_finite_loss_and_points():
     encoder, decoder = make_models()
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2)
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device='cpu')
     graph, true_verts, mask = make_batch()
 
     loss, points = stepper.train_step(graph, true_verts, mask)
@@ -87,7 +81,7 @@ def test_training_step_returns_finite_loss_and_points():
 def test_training_step_updates_parameters():
     """A real gradient must flow through encoder -> decoder and move the weights."""
     encoder, decoder = make_models()
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2)
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device='cpu')
     graph, true_verts, mask = make_batch()
 
     before = decoder.fold2.weight.detach().clone()
@@ -99,7 +93,7 @@ def test_training_step_updates_parameters():
 
 def test_training_step_is_stable_over_multiple_steps():
     encoder, decoder = make_models()
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3)
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
     graph, true_verts, mask = make_batch()
 
     losses = [stepper.train_step(graph, true_verts, mask)[0] for _ in range(5)]
@@ -113,9 +107,9 @@ class _RecordingStepper:
     def __init__(self):
         self.calls = 0
 
-    def train_step(self, batch):
+    def train_step(self, *batch):
         self.calls += 1
-        return 'state', 0.5, {'aux': True}  # (state, loss, aux)
+        return 0.5, None  # (loss, pred)
 
 
 class _RecordingLogger:
@@ -133,7 +127,7 @@ class _RecordingLogger:
 
 
 class _InfiniteLoader:
-    """Iterable that yields a fixed batch forever (orchestrator uses next(iter(loader)))."""
+    """Iterable that yields a fixed (empty) batch forever."""
     def __iter__(self):
         while True:
             yield (None, None, None)
@@ -166,7 +160,7 @@ class _OneBatchLoader:
 
 def test_orchestrator_runs_real_training_end_to_end():
     encoder, decoder = make_models()
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3)
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
     logger = _RecordingLogger()
     loader = _OneBatchLoader(make_batch())
 

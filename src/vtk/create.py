@@ -2,6 +2,7 @@ import vtk
 from vtk.util import numpy_support
 import numpy as np
 import torch
+
 def create_polydata(points, faces=None):
     """Creates a VTK PolyData object from points and optional faces."""
 
@@ -47,11 +48,24 @@ def create_polydata_w_lines(points, lines):
     points: (N, 3) array
     lines: (M, 2) array of index pairs [start_idx, end_idx]
     """
+    print(f"creating poly with {points.shape} positions and {lines.shape} lines")
     if isinstance(points, torch.Tensor):
         points = points.detach().cpu().numpy()
+        print(f"convert to {points.shape}")
     if isinstance(lines, torch.Tensor):
         lines = lines.detach().cpu().numpy()
-        
+        print(f"convert to {lines.shape}")
+
+    # Always expect (M, 2): one [start_idx, end_idx] pair per line. Reject the
+    # transposed PyG edge_index (2, M) up front — otherwise VTK reinterprets node
+    # indices as cell point-counts and reads out of bounds (random crashes).
+    lines = np.asarray(lines)
+    if lines.ndim != 2 or lines.shape[1] != 2:
+        raise ValueError(
+            f"create_polydata_w_lines expects lines of shape (M, 2), got {lines.shape}. "
+            "Pass edges as [start, end] index pairs (transpose a (2, M) edge_index first)."
+        )
+
     polydata = vtk.vtkPolyData()
     
     # 1. Set Points

@@ -10,26 +10,32 @@ from src.learning.modules.equivariant.layer_norm import (
 )
 
 class EquiLayer(nn.Module):
-    def __init__(self, in_irreps, target_irreps, sh_lmax = 1, verbose=True):
+    def __init__(self, in_irreps, target_irreps, spatial_sh_lmax = 1,
+                 interaction_sh_lmax = 1, interaction_irreps = None, verbose=True):
         super().__init__()
         self.in_irreps = o3.Irreps(in_irreps)
         self.target_irreps = o3.Irreps(target_irreps)
-        self.sh_lmax = sh_lmax
+        if interaction_irreps != None:
+            self.interaction_irreps = o3.Irreps(interaction_irreps)
+        else: 
+            self.interaction_irreps = o3.Irreps(target_irreps)
+        self.spatial_sh_lmax = spatial_sh_lmax
+        self.interaction_sh_lmax = interaction_sh_lmax
         self.verbose = verbose
 
-        # 1. Self Interaction
+        # Self Interaction 
         self.self_int = SelfInteraction(
             in_irreps=self.in_irreps,
-            target_irreps=self.target_irreps,
-            sh_lmax=self.sh_lmax,
+            target_irreps=self.interaction_irreps,
+            sh_lmax=self.interaction_sh_lmax,
             verbose=verbose
         )
 
-        # 2. Spatial Convolution
+        # followed by Spatial Convolution
         self.spatial_conv = SpatialConvolution(
-            in_irreps=self.target_irreps,
+            in_irreps=self.interaction_irreps,
             target_irreps=self.target_irreps,
-            sh_lmax=self.sh_lmax,
+            sh_lmax=self.spatial_sh_lmax,
             verbose=verbose
         )
 
@@ -60,6 +66,11 @@ class EquiLayer(nn.Module):
         
         if self.verbose:
             print("------Skip connection--------")
+            print("msg + skip with msg = spatial_conv( self_interact(x) )")
+            if self.res_proj:
+                print(f"self.res_proj is active with"
+                    f" self.res_proj.irreps_in: {self.res_proj.irreps_in}"
+                    f" self.res_proj.irreps_out: {self.res_proj.irreps_out}")
             print("x.shape: ", x.shape)
             print("msg.shape: ", msg.shape)
             print("skip.shape: ", skip.shape)
