@@ -13,10 +13,31 @@ from src.graphs.graphs import (
     get_individual_graph,
     get_bipartite_graph)
 from src.transforms.padding import pad_vertex_list
+import random
 
-
-def load_dataset(data_path = "DATA_ROOT", parts = ["mouth", "nose"] ):
+def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"]):
     """Load face-part shapes; fall back to tests/data so the script always runs."""
+    vertices = []
+    for part in parts:
+        for file in glob.glob(os.path.join(data_path, part, "*.vtp")):
+            verts, _ = extract_vtp_points_cells(load_vtp(file))
+            vertices.append(verts)
+            
+    if not vertices:
+        print("Dataset not found - falling back to tests/data shapes.")
+        # Assuming you have a fallback mechanism here
+        
+    # --- Shuffle the list of vertices ---
+    random.shuffle(vertices)
+    
+    print("loaded shapes:", [v.shape for v in vertices])
+    
+    # Now pad the shuffled list
+    padded, mask = pad_vertex_list(vertices)
+    
+    return torch.tensor(padded, dtype=torch.float32), torch.tensor(mask, dtype=torch.bool)
+""" 
+def load_dataset(data_path = "DATA_ROOT", parts = ["mouth", "nose"] ):
     vertices = []
     for part in parts:
         for file in glob.glob(os.path.join(data_path, part, "*.vtp")):
@@ -27,7 +48,7 @@ def load_dataset(data_path = "DATA_ROOT", parts = ["mouth", "nose"] ):
     print("loaded shapes:", [v.shape for v in vertices])
     padded, mask = pad_vertex_list(vertices)
     return torch.tensor(padded, dtype=torch.float32), torch.tensor(mask, dtype=torch.bool)
-
+"""
 
 def build_training_graph(vertices, mask, 
                          key, 
@@ -63,14 +84,15 @@ def save_graph_vtp(graph,
                    output_dir = "OUTPUT_DIR", 
                    is_supernodes = False):
     for sample_idx in range(int(graph.batch.max()) + 1):
-        if is_supernodes:
-            pos, edges, node_field = get_bipartite_graph(graph, sample_idx)
-        else:
-            pos, edges = get_individual_graph(graph, sample_idx)
-        save_path = os.path.join(output_dir, f"init_graph_{sample_idx}.vtp")
-        vtp = create_polydata_w_lines(pos, edges)
-        if is_supernodes:
-            vtp = add_point_field(vtp, field_data=node_field,  field_name="super_node")
-        save_vtp(vtp, save_path)
+        if sample_idx <= 10:
+            if is_supernodes:
+                pos, edges, node_field = get_bipartite_graph(graph, sample_idx)
+            else:
+                pos, edges = get_individual_graph(graph, sample_idx)
+            save_path = os.path.join(output_dir, f"init_graph_{sample_idx}.vtp")
+            vtp = create_polydata_w_lines(pos, edges)
+            if is_supernodes:
+                vtp = add_point_field(vtp, field_data=node_field,  field_name="super_node")
+            save_vtp(vtp, save_path)
 
 

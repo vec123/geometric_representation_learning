@@ -147,13 +147,13 @@ class GroupEncoder(nn.Module):
 
         mu = mu.unsqueeze(1)
         logvar = logvar.unsqueeze(1)
-        #mu = self.mu_ln(mu)
+        mu = self.mu_ln(mu)
 
-        print("mu.shape: ", mu.shape)
-        mu = mu.squeeze(1)
-        mu = self.mu_bn(mu)
-        mu = mu.unsqueeze(1)
-        print("mu.shape: ", mu.shape)
+        #print("mu.shape: ", mu.shape)
+        #mu = mu.squeeze(1)
+        #mu = self.mu_bn(mu)
+        #mu = mu.unsqueeze(1)
+        #print("mu.shape: ", mu.shape)
         # Equivariant Output (Rotation & Translation)
         vectors = vector_features(feat, self.out_irreps, '1o')    #[n_nodes, n_vec, 3]
         n_vec = vectors.shape[1]

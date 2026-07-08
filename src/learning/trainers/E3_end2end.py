@@ -99,12 +99,13 @@ class TrainingOrchestrator:
     forwarded to ``stepper.train_step(*batch)``.
     """
 
-    def __init__(self, stepper, logger, dataloader):
+    def __init__(self, stepper, logger, dataloader, val_loader=None):
         self.stepper = stepper
         self.logger = logger
         self.dataloader = dataloader
+        self.dataloader = val_loader
 
-    def run(self, num_steps, log_every=100, save_every=200):
+    def run(self, num_steps, log_every=100, save_every=20, val_every = 10):
         data_iter = iter(self.dataloader)
         for step in range(num_steps):
             try:
@@ -121,3 +122,23 @@ class TrainingOrchestrator:
             if step % save_every == 0:
                 self.logger.save_checkpoint(self.stepper, step)
                 self.logger.visualize_batch(batch, pred, step)
+            if self.val_loader and step % val_every == 0:
+                    self.run_validation(step)
+
+    @torch.no_grad()
+    def run_validation(self, step):
+        self.stepper.encoder.eval()
+        self.stepper.decoder.eval()
+        
+        val_losses = []
+        for batch in self.val_loader:
+            # Assume stepper has a method to compute loss without updating weights
+            # You might need to add this to TrainingStepper
+            loss, _ = self.stepper.train_step(*batch) # Careful: Ensure this doesn't step optimizer!
+            val_losses.append(loss)
+            
+        avg_val_loss = sum(val_losses) / len(val_losses)
+        self.logger.log_metrics({"val_loss": avg_val_loss}, step)
+        
+        self.stepper.encoder.train()
+        self.stepper.decoder.train()

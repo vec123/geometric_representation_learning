@@ -25,19 +25,20 @@ class Logger1:
         }, path)
         print(f"  checkpoint -> {path}")
 
-    def visualize_results(self, pred, step):
+    def visualize_results(self, pred, step, max_num = 4):
         pred = pred.detach().cpu().numpy()
         for i in range(pred.shape[0]):
-            path = os.path.join(self.log_dir, "vtk", f"pred_shape{i}_step{step}.vtp")
-            save_vtp(create_polydata(pred[i]), path)
-        print(f"  saved {pred.shape[0]} prediction VTP(s) at step {step}")
+            if i < max_num:
+                path = os.path.join(self.log_dir, "vtk", f"pred_shape{i}_step{step}.vtp")
+                save_vtp(create_polydata(pred[i]), path)
+        print(f"  saved some of {pred.shape[0]} prediction VTP(s) at step {step}")
         
         
         
     
 
 class TrainingLogger:
-    def __init__(self, log_dir="logs"):
+    def __init__(self, log_dir="logs", val_loader = None):
         self.log_dir = log_dir
 
     def log_metrics(self, metrics, step):
@@ -54,12 +55,13 @@ class TrainingLogger:
         }, path)
         print(f"  checkpoint -> {path}")
 
-    def visualize_results(self, pred, step):
+    def visualize_results(self, pred, step, max_num = 4):
         pred = pred.detach().cpu().numpy()
         for i in range(pred.shape[0]):
-            path = os.path.join(self.log_dir, "vtk", f"pred_shape{i}_step{step}.vtp")
-            save_vtp(create_polydata(pred[i]), path)
-        print(f"  saved {pred.shape[0]} prediction VTP(s) at step {step}")
+            if i < max_num:
+                path = os.path.join(self.log_dir, "vtk", f"pred_shape{i}_step{step}.vtp")
+                save_vtp(create_polydata(pred[i]), path)
+        print(f" saved {max_num} of {pred.shape[0]} prediction VTP(s) at step {step}")
 
     def visualize_batch(self, batch, pred, step):
         """Save, for this step, the input graph, the supergraph (if any), the true
@@ -76,40 +78,43 @@ class TrainingLogger:
         self._save_true_verts(true_verts, mask, step)
         self.visualize_results(pred, step)
 
-    def _save_true_verts(self, true_verts, mask, step):
+    def _save_true_verts(self, true_verts, mask, step, max_num = 4):
         """Save the reconstruction target as a point cloud (no edges), one VTP per shape.
         Padded entries are dropped via ``mask`` so only real vertices are written."""
         out_dir = os.path.join(self.log_dir, "vtk")
         tv = true_verts.detach().cpu()
         m = mask.detach().cpu().bool() if mask is not None else None
         for i in range(tv.shape[0]):
-            pts = tv[i][m[i]] if m is not None else tv[i]        # [n_i, 3] valid verts
-            save_vtp(create_polydata(pts), os.path.join(out_dir, f"true_verts_shape{i}_step{step}.vtp"))
-        print(f"  saved {tv.shape[0]} true-verts VTP(s) at step {step}")
+            if i < max_num:
+                pts = tv[i][m[i]] if m is not None else tv[i]        # [n_i, 3] valid verts
+                save_vtp(create_polydata(pts), os.path.join(out_dir, f"true_verts_shape{i}_step{step}.vtp"))
+        print(f"  saved {max_num} of {tv.shape[0]} true-verts VTP(s) at step {step}")
 
-    def _save_graph_vtp(self, graph, step, name, is_supernodes=False):
+    def _save_graph_vtp(self, graph, step, name, is_supernodes=False, max_num = 4):
         """Render one VTP per shape (with edges) for a homogeneous graph, or the merged
         full+super point set with aggregation lines for a bipartite supergraph."""
         out_dir = os.path.join(self.log_dir, "vtk")
         num_graphs = int(graph.batch.max().item()) + 1
         for i in range(num_graphs):
-            if is_supernodes:
-                pos, edges, node_field = get_bipartite_graph(graph, i)
-            else:
-                pos, edges = get_individual_graph(graph, i)
-            vtp = create_polydata_w_lines(pos, edges)
-            if is_supernodes:
-                vtp = add_point_field(vtp, field_data=node_field, field_name="super_node")
-            save_vtp(vtp, os.path.join(out_dir, f"{name}_shape{i}_step{step}.vtp"))
-        print(f"  saved {num_graphs} {name} VTP(s) at step {step}")
+            if i < max_num:
+                if is_supernodes:
+                    pos, edges, node_field = get_bipartite_graph(graph, i)
+                else:
+                    pos, edges = get_individual_graph(graph, i)
+                vtp = create_polydata_w_lines(pos, edges)
+                if is_supernodes:
+                    vtp = add_point_field(vtp, field_data=node_field, field_name="super_node")
+                save_vtp(vtp, os.path.join(out_dir, f"{name}_shape{i}_step{step}.vtp"))
+        print(f"  saved {max_num} of {num_graphs} {name} VTP(s) at step {step}")
 
-    def log_visualizations(self, data_dict, step, sample_idx=0):
+    def log_visualizations(self, data_dict, step, sample_idx=0, max_num = 4):
         """
         Expects data_dict: {'original': np.array, 'canonical': np.array, ...}
         """
-        for name, data in data_dict.items():
-            print(f"Logging visualization for {name} at step {step}")
-            poly = create_polydata(data)
-            path = os.path.join(self.log_dir, "vtk", f"{sample_idx}_{name}_{step}.vtp")
-            save_vtp(poly, path)
-    
+        for i, (name, data) in enumerate(data_dict.items()):
+            if i < max_num:
+                print(f"Logging visualization for {name} at step {step}")
+                poly = create_polydata(data)
+                path = os.path.join(self.log_dir, "vtk", f"{sample_idx}_{name}_{step}.vtp")
+                save_vtp(poly, path)
+        

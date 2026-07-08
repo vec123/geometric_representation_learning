@@ -61,7 +61,7 @@ class GroupPerceiverEncoder(nn.Module):
         vae_mode=None,
         sh_lmax=1,
         supernode_sh_lmax =1,
-        interaction_sh_lmax=4,
+        interaction_sh_lmax=2,
         n_perceiver_layers = 4,
         perceiver_weight_sharing = True,
         verbose=False,
@@ -80,15 +80,15 @@ class GroupPerceiverEncoder(nn.Module):
         # Equivariant GNN backbone (same stack shape as GroupEncoder).
         self.layers = nn.ModuleList([
                 EquiLayer(in_irreps=in_irreps,
-                            target_irreps=mid_irreps,
+                            target_irreps=out_irreps,
                             spatial_sh_lmax = sh_lmax,
-                            interaction_sh_lmax = 2,
-                            verbose=verbose),
-                EquiLayer(in_irreps=mid_irreps, 
-                        target_irreps=out_irreps,
-                        spatial_sh_lmax = sh_lmax,
-                        interaction_sh_lmax = 2,
+                            interaction_sh_lmax = interaction_sh_lmax,
                             verbose=verbose)
+               # EquiLayer(in_irreps=mid_irreps, 
+               #         target_irreps=out_irreps,
+               #         spatial_sh_lmax = sh_lmax,
+               #         interaction_sh_lmax = interaction_sh_lmax,
+               #             verbose=verbose)
             ])
 
         # Number of invariant scalar channels the GNN emits (the transformer width).

@@ -42,7 +42,7 @@ from src.learning.helpers import load_dataset, build_training_graph, save_graph_
 USE_SUPERNODES = True          # toggle: supernode subset (True) vs full/decimated graph (False)
 N_SUPERNODES   = 10           # n_s, used when USE_SUPERNODES is True
 SAMPLING_MODE  = "fps"         # 'fps' | 'uniform' | 'gaussian'
-DROPOUT_RATE   = 0.8          # uniform node dropout to reduce data-sample size uniformly
+DROPOUT_RATE   = 0.9          # uniform node dropout to reduce data-sample size uniformly
 NOISE_STD      = 0.00          #Optional: noise addition
 R_MAX         = 0.25         #radius for graph
 R_SUPERGRPAH = 0.6
@@ -54,16 +54,22 @@ RESAMPLE_GRAPH   = False
 RESAMPLE_R_MAX   = R_MAX
 RESAMPLE_DROPOUT = DROPOUT_RATE
 
-LATENT_DIM     = 8
+LATENT_DIM     = 5
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
 LEARNING_RATE  = 1e-3
-NUM_STEPS      = 201
+NUM_STEPS      = 1001
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
 
 Project_ROOT = get_project_root()
-SHAPE_DATA_ROOT = os.path.join(Project_ROOT, "Dataset", "vtp_samples", "Dataset_faceparts_normalized_small")
-OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_radial_fourier")
+SHAPE_DATA_ROOT = os.path.join(Project_ROOT, 
+                               "Dataset", "vtp_samples",
+                                 "Dataset_faceparts_normalized")
+VAL_SHAPE_DATA_ROOT =  os.path.join(
+    Project_ROOT, 
+    "Dataset", "vtp_samples", "Dataset_faceparts_normalized")
+
+OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_50_nose_bridge_ln")
 
 
 
@@ -75,8 +81,9 @@ def main():
     key = torch.Generator(device="cpu")
     key.manual_seed(0)
 
+    parts = ["bridge", "nose"]
     shape_vertices, shape_mask = load_dataset(data_path=SHAPE_DATA_ROOT,
-                                            parts = ["mouth", "nose"] )
+                                            parts = parts )
   
     graph, supergraph = build_training_graph(shape_vertices, 
                                  shape_mask,
@@ -131,8 +138,24 @@ def main():
         loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))
         print("loader: prebuilt graph reused every step")
 
+    
+    val_shape_vertices, val_shape_mask = load_dataset(data_path=VAL_SHAPE_DATA_ROOT,
+                                            parts = parts)
+    
+    val_graph, val_supergraph = build_training_graph(shape_vertices, 
+                                 shape_mask,
+                                key,
+                                r_max = R_MAX, 
+                                 r_supergraph= R_SUPERGRPAH,
+                                dropout_rate = DROPOUT_RATE, 
+                                n_supernodes = N_SUPERNODES, 
+                                use_supernodes= USE_SUPERNODES)
+    
+    val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
+
+
     stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE, kl_weight=0.0)
-    logger = TrainingLogger(log_dir = OUTPUT_DIR)
+    logger = TrainingLogger(log_dir = OUTPUT_DIR, val_loader = val_loader)
     trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader)
 
     print(f"----------training on device: {stepper.device}----------")

@@ -57,15 +57,22 @@ RESAMPLE_GRAPH   = False
 RESAMPLE_R_MAX   = R_MAX
 RESAMPLE_DROPOUT = DROPOUT_RATE
 
-LATENT_DIM     = 8
+LATENT_DIM     = 4
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
 LEARNING_RATE  = 1e-3
-NUM_STEPS      = 100
+NUM_STEPS      = 101
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
 
 Project_ROOT = get_project_root()
-SHAPE_DATA_ROOT = os.path.join(Project_ROOT, "Dataset", "vtp_samples", "Dataset_faceparts_normalized_small")
+SHAPE_DATA_ROOT = os.path.join(
+    Project_ROOT, 
+    "Dataset", "vtp_samples", "Dataset_faceparts_normalized_small")
+
+VAL_SHAPE_DATA_ROOT =  os.path.join(
+    Project_ROOT, 
+    "Dataset", "vtp_samples", "val_Dataset_faceparts_normalized_small")
+
 OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_perceiver")
 
 
@@ -114,14 +121,14 @@ def main():
 
     encoder = GroupPerceiverEncoder(
         irreps_cfg=layer_cfg, 
-        n_latent=8,
+        n_latent=4,
         d_shared=LATENT_DIM,
-        self_attn_heads=2,
-        cross_attn_heads=2,
+        self_attn_heads=1,
+        cross_attn_heads=1,
         n_self_layers=1,
-        widening_factor=2,
-        reduce_stages=[4,1],
-        reduce_heads=2,
+        widening_factor=1,
+        reduce_stages=[1],
+        reduce_heads=1,
         vae_mode="per_token",
         sh_lmax=1,
         interaction_sh_lmax=1,
@@ -151,8 +158,23 @@ def main():
         print("loader: prebuilt graph reused every step")
 
 
+    val_shape_vertices, val_shape_mask = load_dataset(data_path=VAL_SHAPE_DATA_ROOT,
+                                            parts = ["mouth", "nose"] )
+  
+  
+    val_graph, val_supergraph = build_training_graph(shape_vertices, 
+                                 shape_mask,
+                                key,
+                                r_max = R_MAX, 
+                                 r_supergraph= R_SUPERGRPAH,
+                                dropout_rate = DROPOUT_RATE, 
+                                n_supernodes = N_SUPERNODES, 
+                                use_supernodes= USE_SUPERNODES)
+    
+    val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
+
     stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE)
-    logger = TrainingLogger(log_dir = OUTPUT_DIR)
+    logger = TrainingLogger(log_dir = OUTPUT_DIR, val_loader = val_loader)
     trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader)
 
     print(f"----------training on device: {stepper.device}----------")

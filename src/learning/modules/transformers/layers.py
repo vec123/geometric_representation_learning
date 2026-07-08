@@ -10,12 +10,12 @@ from src.learning.modules.transformers.heads import MultiHeadAttention
 
 
 class MLP(nn.Module):
-    def __init__(self, input_size, widening_factor, dropout_prob=0.0):
+    def __init__(self, input_size, widening_factor, dropout_prob=0.5):
         super().__init__()
         self.dense1 = nn.Linear(input_size, input_size * widening_factor)
         self.dense2 = nn.Linear(input_size * widening_factor, input_size)
         self.gelu = nn.GELU()
-        self.dropout = nn.Dropout()
+        self.dropout = nn.Dropout(dropout_prob)
 
     def forward(self, x):
         x = self.dense1(x)
