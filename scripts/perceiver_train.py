@@ -56,16 +56,16 @@ RESAMPLE_GRAPH   = False
 RESAMPLE_R_MAX   = R_MAX
 RESAMPLE_DROPOUT = DROPOUT_RATE
 
-LATENT_DIM     = 32
+LATENT_DIM     = 8
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
-LEARNING_RATE  = 1e-4
-NUM_STEPS      = 1000
+LEARNING_RATE  = 1e-3
+NUM_STEPS      = 100
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
 
 Project_ROOT = get_project_root()
 SHAPE_DATA_ROOT = os.path.join(Project_ROOT, "Dataset", "vtp_samples", "Dataset_faceparts_normalized_small")
-OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_fixed")
+OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_perceiver")
 
 
 
@@ -82,7 +82,7 @@ def main():
                                             parts = ["mouth", "nose"] )
   
   
-    graph = build_training_graph(shape_vertices, 
+    graph, supergraph = build_training_graph(shape_vertices, 
                                  shape_mask,
                                 key,
                                 r_max=R_MAX, 
@@ -93,8 +93,13 @@ def main():
     mode = f"supernodes(n_s={N_SUPERNODES}, {SAMPLING_MODE})" if USE_SUPERNODES else f"full(dropout={DROPOUT_RATE})"
     print(f"graph mode: {mode} | nodes={graph.num_nodes} | shapes={int(graph.batch.max()) + 1}")
     save_graph_vtp(graph,
-                   output_dir =OUTPUT_DIR, 
-                   is_supernodes = USE_SUPERNODES )
+                   output_dir = os.path.join(OUTPUT_DIR, "init_graphs"),
+                   is_supernodes = False )
+    if supergraph is not None:
+        save_graph_vtp(supergraph,
+                   output_dir = os.path.join(OUTPUT_DIR, "init_supernodes"),
+                   is_supernodes = True )
+   
 
 
    
@@ -139,7 +144,7 @@ def main():
             r_max=RESAMPLE_R_MAX, dropout_rate=RESAMPLE_DROPOUT)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT})")
     else:
-        loader = OneBatchLoader((graph, shape_vertices, shape_mask))
+        loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))
         print("loader: prebuilt graph reused every step")
 
     stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE)

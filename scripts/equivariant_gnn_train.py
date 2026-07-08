@@ -39,31 +39,31 @@ from src.learning.helpers import load_dataset, build_training_graph, save_graph_
 # --------------------------------------------------------------------------- #
 # Config
 # --------------------------------------------------------------------------- #
-USE_SUPERNODES = False          # toggle: supernode subset (True) vs full/decimated graph (False)
-N_SUPERNODES   = 50           # n_s, used when USE_SUPERNODES is True
+USE_SUPERNODES = True          # toggle: supernode subset (True) vs full/decimated graph (False)
+N_SUPERNODES   = 10           # n_s, used when USE_SUPERNODES is True
 SAMPLING_MODE  = "fps"         # 'fps' | 'uniform' | 'gaussian'
 DROPOUT_RATE   = 0.8          # uniform node dropout to reduce data-sample size uniformly
 NOISE_STD      = 0.00          #Optional: noise addition
 R_MAX         = 0.25         #radius for graph
-
+R_SUPERGRPAH = 0.6
 # Rebuild the encoder graph from geometry each step (fit geometry, not a fixed graph).
 # False -> build one graph up front and reuse it every step (prebuilt path).
-RESAMPLE_GRAPH   = False
+RESAMPLE_GRAPH   = True
 # When resampling, each may be a fixed float or a (low, high) range sampled per step,
 # e.g. RESAMPLE_R_MAX = (0.2, 0.3) / RESAMPLE_DROPOUT = (0.7, 0.9).
 RESAMPLE_R_MAX   = R_MAX
 RESAMPLE_DROPOUT = DROPOUT_RATE
 
-LATENT_DIM     = 5
+LATENT_DIM     = 16
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
-LEARNING_RATE  = 1e-4
-NUM_STEPS      = 10
+LEARNING_RATE  = 1e-3
+NUM_STEPS      = 201
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
 
 Project_ROOT = get_project_root()
 SHAPE_DATA_ROOT = os.path.join(Project_ROOT, "Dataset", "vtp_samples", "Dataset_faceparts_normalized_small")
-OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs")
+OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_radial_fourier")
 
 
 
@@ -78,32 +78,38 @@ def main():
     shape_vertices, shape_mask = load_dataset(data_path=SHAPE_DATA_ROOT,
                                             parts = ["mouth", "nose"] )
   
-    graph = build_training_graph(shape_vertices, 
+    graph, supergraph = build_training_graph(shape_vertices, 
                                  shape_mask,
                                 key,
-                                r_max=R_MAX, 
+                                r_max=R_MAX,       
                                 dropout_rate=DROPOUT_RATE, 
                                 n_supernodes = N_SUPERNODES, 
+                                 r_supergraph= R_SUPERGRPAH,
                                 use_supernodes= USE_SUPERNODES)
-    
+
     mode = f"supernodes(n_s={N_SUPERNODES}, {SAMPLING_MODE})" if USE_SUPERNODES else f"full(dropout={DROPOUT_RATE})"
     print(f"graph mode: {mode} | nodes={graph.num_nodes} | shapes={int(graph.batch.max()) + 1}")
     save_graph_vtp(graph,
-                   output_dir =OUTPUT_DIR, 
-                   is_supernodes = USE_SUPERNODES )
-
+                   output_dir = os.path.join(OUTPUT_DIR, "init_graphs"),
+                   is_supernodes = False )
+    if supergraph is not None:
+        save_graph_vtp(supergraph,
+                   output_dir = os.path.join(OUTPUT_DIR, "init_supernodes"),
+                   is_supernodes = True )
    
     layer_cfg = {
         "input_irreps": "1x0e",
-        "intermediate_irreps": "32x0e + 32x1o",
+        "intermediate_irreps": "32x0e + 16x1o+ 4x2o",
         "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
     }
 
-
+        
     encoder = GroupEncoder(
         latent_dim=LATENT_DIM, 
         irreps_cfg=layer_cfg, 
         sh_lmax = 1,
+        readout = "mean",
+        readout_heads = 1,
         verbose=False)
     
     decoder = FoldingDecoder(
@@ -120,10 +126,10 @@ def main():
             r_max=RESAMPLE_R_MAX, dropout_rate=RESAMPLE_DROPOUT)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT})")
     else:
-        loader = OneBatchLoader((graph, shape_vertices, shape_mask))
+        loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))
         print("loader: prebuilt graph reused every step")
 
-    stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE)
+    stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE, kl_weight=0.0)
     logger = TrainingLogger(log_dir = OUTPUT_DIR)
     trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader)
 

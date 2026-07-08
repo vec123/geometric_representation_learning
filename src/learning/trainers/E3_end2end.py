@@ -28,28 +28,36 @@ class TrainingStepper:
             lr=learning_rate,
         )
 
-    def encode(self, graph):
+    def encode(self, graph, supergraph):
         """Adapt the current GroupEncoder output into the standard EncoderOutput.
 
         NOTE: once encoders return an EncoderOutput directly this collapses to
         ``return self.encoder(graph)`` and any encoder becomes drop-in. This is the
         single seam that couples the trainer to the encoder's current signature.
         """
+       
         out = self.encoder(
-            graph.x, graph.pos, graph.edge_index, graph.batch
-        )
+                graph, supergraph
+                )
+        
         assert isinstance(out, EncoderOutput)
         return out    
 
-    def train_step(self, graph, true_verts, padding_mask):
+    def train_step(self, graph, super_graph, true_verts, padding_mask):
         graph = graph.to(self.device)
+        super_graph = super_graph.to(self.device) if super_graph is not None else None
         true_verts = true_verts.to(self.device)
         padding_mask = padding_mask.to(self.device)
 
         self.optimizer.zero_grad()
 
-        enc = self.encode(graph)
-        latent = self.reparameterize(enc.mu, enc.logvar)
+        enc = self.encode(graph, super_graph)
+        print(torch.cdist(enc.mu, enc.mu))     
+        z = torch.randn(4, 16, device=self.device) * 3   # 4 deliberately different codes
+        out = self.decoder(z)
+        print(torch.cdist(out.reshape(4, -1), out.reshape(4, -1)))  # ~0 => decoder ignores the latent
+
+        latent = enc.mu   #self.reparameterize(enc.mu, enc.logvar)
         pred = self.decoder(latent)
 
         # The encoder's batch dim comes from graph.batch, which can desync from the
@@ -109,4 +117,4 @@ class TrainingOrchestrator:
                 self.logger.log_metrics({"loss": loss}, step)
             if step % save_every == 0:
                 self.logger.save_checkpoint(self.stepper, step)
-                self.logger.visualize_results(pred, step)
+                self.logger.visualize_batch(batch, pred, step)

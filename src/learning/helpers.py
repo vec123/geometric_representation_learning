@@ -34,6 +34,7 @@ def build_training_graph(vertices, mask,
                          r_max=0.1, 
                          dropout_rate=0.8, 
                          n_supernodes = 10, 
+                         r_supergraph = 0.2,
                          use_supernodes= False):
     """Build the graph fed to the encoder, per the USE_SUPERNODES toggle, and attach
     a constant 1x0e node feature (the encoder consumes `graph.x`).
@@ -41,20 +42,22 @@ def build_training_graph(vertices, mask,
     ``r_max`` / ``dropout_rate`` default to the module constants; the resampling loader
     overrides them (and advances ``key``) to draw a fresh graph each training step."""
 
-    full_graph = get_graphs_from_vertices(
+    radius_graph = get_graphs_from_vertices(
             vertices, masks=mask, r_max=r_max, dropout_rate=dropout_rate, noise_std=0.0,
             key=key, sampling_mode="uniform")
 
     if use_supernodes:
-        graph = build_super_graph(vertices, mask, full_graph,
+        super_graph = build_super_graph(vertices, mask, radius_graph,
                                    num_samples = n_supernodes,
-                                    r_max = r_max,
-                                    mode = "uniform")
+                                    r_max = r_supergraph,
+                                    mode = "fps")
     else:
-        graph = full_graph
-    graph.x = torch.ones(graph.num_nodes, 1)
+        super_graph = None
+    radius_graph.x = torch.ones(radius_graph.num_nodes, 1)
+    if super_graph is not None:
+     super_graph.x = torch.ones(super_graph.num_nodes, 1)
 
-    return graph
+    return radius_graph, super_graph
 
 def save_graph_vtp(graph, 
                    output_dir = "OUTPUT_DIR", 

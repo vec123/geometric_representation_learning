@@ -23,14 +23,16 @@ class ResamplingGraphLoader:
     ``r_max`` and ``dropout_rate`` may each be a fixed float or a ``(low, high)`` range
     that is sampled uniformly per step.
     """
-    def __init__(self, vertices, mask, build_fn, key=None,
-                 r_max=0.2, dropout_rate=0.8):
+    def __init__(self, vertices, mask, build_fn,
+                  key=None, r_max=0.2, dropout_rate=0.8, use_supernodes = False):
+        
         self.vertices = vertices
         self.mask = mask
         self.build_fn = build_fn
         self.key = key
         self.r_max = r_max
         self.dropout_rate = dropout_rate
+        self.use_supernodes = use_supernodes
 
     def _sample(self, value):
         """Return value as-is if scalar, else draw uniformly from a (low, high) range."""
@@ -42,9 +44,10 @@ class ResamplingGraphLoader:
 
     def __iter__(self):
         while True:
-            graph = self.build_fn(
+            graph, supergraph = self.build_fn(
                 self.vertices, self.mask, key=self.key,
                 r_max=self._sample(self.r_max),
                 dropout_rate=self._sample(self.dropout_rate),
+                use_supernodes= self.use_supernodes
             )
-            yield (graph, self.vertices, self.mask)
+            yield (graph, supergraph, self.vertices, self.mask)

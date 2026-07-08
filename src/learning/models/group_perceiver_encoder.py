@@ -32,6 +32,7 @@ rotation/translation invariant; the higher-order (l>0) channels are dropped here
 
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pad_sequence
 from e3nn import o3
 
 from src.learning.layers.equivariant.Self_Spatial_layer import EquiLayer
@@ -43,7 +44,7 @@ from src.learning.modules.transformers.perceiver_encoder import (
     PerceiverReducer,
 )
 from src.learning.modules.transformers.self_attention import SelfAttentionBlock
-
+from src.learning.modules.equivariant.interaction import BipartiteSpatialConvolution
 
 class GroupPerceiverEncoder(nn.Module):
     def __init__(
@@ -59,6 +60,7 @@ class GroupPerceiverEncoder(nn.Module):
         reduce_heads=4,
         vae_mode=None,
         sh_lmax=1,
+        supernode_sh_lmax =1,
         interaction_sh_lmax=4,
         n_perceiver_layers = 4,
         perceiver_weight_sharing = True,
@@ -77,9 +79,22 @@ class GroupPerceiverEncoder(nn.Module):
 
         # Equivariant GNN backbone (same stack shape as GroupEncoder).
         self.layers = nn.ModuleList([
-            EquiLayer(in_irreps=in_irreps,  target_irreps=out_irreps,
-                      spatial_sh_lmax=sh_lmax, interaction_sh_lmax=interaction_sh_lmax, verbose=verbose),
-        ])
+                EquiLayer(in_irreps=in_irreps,
+                            target_irreps=mid_irreps,
+                            spatial_sh_lmax = sh_lmax,
+                            interaction_sh_lmax = 2,
+                            verbose=verbose),
+                EquiLayer(in_irreps=mid_irreps,
+                        target_irreps=mid_irreps,
+                            spatial_sh_lmax = sh_lmax,
+                            interaction_sh_lmax = 2, 
+                        verbose=verbose),
+                EquiLayer(in_irreps=mid_irreps, 
+                        target_irreps=out_irreps,
+                        spatial_sh_lmax = sh_lmax,
+                        interaction_sh_lmax = 2,
+                            verbose=verbose)
+            ])
 
         # Number of invariant scalar channels the GNN emits (the transformer width).
         n_scalar = self.out_irreps.count(o3.Irrep("0e"))
@@ -91,6 +106,11 @@ class GroupPerceiverEncoder(nn.Module):
             raise ValueError(f"d_shared ({d_shared}) must be divisible by cross_attn_heads ({cross_attn_heads}).")
         self.n_scalar = n_scalar
 
+        self.supernode_conv = BipartiteSpatialConvolution(
+                in_irreps=self.out_irreps, target_irreps=self.out_irreps,
+                sh_lmax=supernode_sh_lmax, verbose=verbose,
+            )
+        
         # Scalar self-attention transformer over the nodes (keeps width n_scalar).
         # Standard pre-norm multi-head self-attention block (torch.nn.MultiheadAttention).
         self.self_attn = nn.ModuleList([
@@ -121,6 +141,7 @@ class GroupPerceiverEncoder(nn.Module):
             ])
 
         # Optional: iteratively reduce the token count (n_latent -> ... -> reduce_stages[-1]).
+        # The reducer has learnable latent queries in each channel.
         self.reducer = None
         if reduce_stages:
             self.reducer = PerceiverReducer(
@@ -131,12 +152,36 @@ class GroupPerceiverEncoder(nn.Module):
         # Optional: VAE head over whatever token set remains (any token count).
         self.vae = LatentVAEHead(d_shared, mode=vae_mode) if vae_mode else None
 
-    def forward(self, x, pos, edge_index, batch_idx):
-        # 1. GNN message passing.
+    def forward(self, graph, supergraph):
+        x = graph.x
+        pos = graph.pos
+        edge_index = graph.edge_index
+        batch_idx = graph.batch
+        if supergraph is not None:
+            super_pos=supergraph.pos 
+            super_batch=supergraph.batch 
+            super_edge_index=supergraph.edge_index    
+
+       # Message Passing on the full graph.
         for i, layer in enumerate(self.layers):
+            if self.verbose:
+                print(f"---------Layer {i} with: "
+                     f" x: {x.shape}, "
+                     f" pos: {pos.shape}, "
+                     f" edge index: {edge_index.shape}")
+
             x = layer(x, pos, edge_index)
             if self.verbose:
-                print(f"[GroupPerceiverEncoder] layer {i} out: {tuple(x.shape)}")
+                print(f"Layer {i} output shape: {x.shape}")
+
+        #  Aggregate into supernodes
+        if supergraph is not None:
+            if super_pos is None or super_batch is None or super_edge_index is None:
+                raise ValueError(
+                    "use_supernodes=True requires super_pos, super_batch and super_edge_index."
+                )
+            x = self.supernode_conv(x, pos, super_pos, super_edge_index)
+            
 
         # Split off the invariant scalar channels.
         scalars = scalar_features(x, self.out_irreps)          # [N_total, n_scalar]
@@ -144,6 +189,7 @@ class GroupPerceiverEncoder(nn.Module):
         # Run the transformer + Perceiver readout once per graph so nodes only
         # attend within their own shape. Batch dim of 1 keeps the (B, N, C) attention
         # ops happy without padding masks.
+        """" 
         num_graphs = int(batch_idx.max().item()) + 1
         out = []
         for b in range(num_graphs):
@@ -155,6 +201,26 @@ class GroupPerceiverEncoder(nn.Module):
             out.append(latent)
 
         tokens = torch.cat(out, dim=0)                         # [B, n_latent, d_shared]
+        """
+        graph_splits = torch.bincount(batch_idx).tolist()
+        nodes_list = torch.split(scalars, graph_splits, dim=0)
+
+        # 2. Pad them into a single dense tensor: [B, max_N_b, n_scalar]
+        nodes_padded = pad_sequence(nodes_list, batch_first=True)
+
+        # 3. Create a key_padding_mask to prevent nodes from attending to padding
+        # Shape: [B, max_N_b] (True where padding exists)
+        B, max_N_b, _ = nodes_padded.shape
+        mask = torch.arange(max_N_b, device=scalars.device).unsqueeze(0) >= torch.tensor(graph_splits, device=scalars.device).unsqueeze(1)
+
+        # 4. Run your Transformer blocks (pass the key_padding_mask to your attention blocks)
+        for block in self.self_attn:
+            nodes_padded = block(nodes_padded, key_padding_mask=mask) 
+
+        # 5. Run Perceiver cross-attention
+        # Pass the same mask to the Perceiver so queries don't attend to padded nodes
+        queries = self.latents.unsqueeze(0).expand(B, -1, -1)
+        tokens = self.perceiver(nodes_padded, queries, key_padding_mask=mask)
 
         # Optional iterative reduction
         if self.reducer is not None:

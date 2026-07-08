@@ -16,17 +16,20 @@ class FoldingDecoder(nn.Module):
         # grid: 2 channels * 2 * n_freqs = 4 * n_freqs
         # latent: latent_dim
         # total = (4 * n_freqs) + latent_dim
-        input_dim_1 = (4 * n_freqs) + latent_dim
-        input_dim_2 = (4 * n_freqs) + latent_dim + 3
+        input_dim_1 = (4 * n_freqs) 
+        input_dim_2 = (4 * n_freqs)  
 
         # Layers
         self.dense1_1 = nn.Linear(input_dim_1, 128)
+        self.film1 = nn.Linear(latent_dim, 128*2)
         self.norm1_1 = nn.LayerNorm(128)
         self.dense1_2 = nn.Linear(128, 128)
         self.norm1_2 = nn.LayerNorm(128)
         self.fold1 = nn.Linear(128, 3)
 
         self.dense2_1 = nn.Linear(input_dim_2, 128)
+        self.film2 = nn.Linear(latent_dim, 128*2)
+        self.film3 = nn.Linear(3, 128*2)
         self.norm2_1 = nn.LayerNorm(128)
         self.dense2_2 = nn.Linear(128, 128)
         self.norm2_2 = nn.LayerNorm(128)
@@ -71,14 +74,26 @@ class FoldingDecoder(nn.Module):
         encoded_grid = self.positional_encoding(grid)
         
         # --- First Fold ---
-        x = torch.cat([encoded_grid, latent_tiled], dim=-1)
-        h = self.norm1_1(F.silu(self.dense1_1(x)))
+        #x = torch.cat([encoded_grid, latent_tiled], dim=-1)
+        #h = self.norm1_1(F.silu(self.dense1_1(x)))
+        # Replace cat conditioning with FiLM conditioning
+        h = self.norm1_1(F.silu(self.dense1_1(encoded_grid)))   # grid pathway, normed
+        g, b = self.film1(latent_tiled).chunk(2, dim=-1)        # latent -> scale/shift
+        h = (1 + g) * h + b 
         h = self.norm1_2(F.silu(self.dense1_2(h) + h))
         points_coarse = self.fold1(h)
         
         # --- Second Fold ---
-        x = torch.cat([encoded_grid, points_coarse, latent_tiled], dim=-1)
-        h = self.norm2_1(F.silu(self.dense2_1(x)))
+        # x = torch.cat([encoded_grid, points_coarse, latent_tiled, x], dim=-1)
+        # Replace cat conditioning with FiLM conditioning
+        h = self.norm2_1(F.silu(self.dense2_1(encoded_grid)))
+        
+        g, b = self.film2(latent_tiled).chunk(2, dim=-1)  # latent -> scale/shift
+        h = (1 + g) * h + b 
+
+        g, b = self.film3(points_coarse).chunk(2, dim=-1)  # latent -> scale/shift
+        h = (1 + g) * h + b 
+
         h = self.norm2_2(F.silu(self.dense2_2(h) + h))
         points_final = points_coarse + self.fold2(h)
         
