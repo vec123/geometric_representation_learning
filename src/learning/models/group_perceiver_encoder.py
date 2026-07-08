@@ -84,11 +84,6 @@ class GroupPerceiverEncoder(nn.Module):
                             spatial_sh_lmax = sh_lmax,
                             interaction_sh_lmax = 2,
                             verbose=verbose),
-                EquiLayer(in_irreps=mid_irreps,
-                        target_irreps=mid_irreps,
-                            spatial_sh_lmax = sh_lmax,
-                            interaction_sh_lmax = 2, 
-                        verbose=verbose),
                 EquiLayer(in_irreps=mid_irreps, 
                         target_irreps=out_irreps,
                         spatial_sh_lmax = sh_lmax,
@@ -152,6 +147,9 @@ class GroupPerceiverEncoder(nn.Module):
         # Optional: VAE head over whatever token set remains (any token count).
         self.vae = LatentVAEHead(d_shared, mode=vae_mode) if vae_mode else None
 
+        self.mu_bn = nn.BatchNorm1d(d_shared)
+        self.mu_ln = nn.LayerNorm(d_shared)
+
     def forward(self, graph, supergraph):
         x = graph.x
         pos = graph.pos
@@ -181,7 +179,7 @@ class GroupPerceiverEncoder(nn.Module):
                     "use_supernodes=True requires super_pos, super_batch and super_edge_index."
                 )
             x = self.supernode_conv(x, pos, super_pos, super_edge_index)
-            
+            batch_idx = super_batch
 
         # Split off the invariant scalar channels.
         scalars = scalar_features(x, self.out_irreps)          # [N_total, n_scalar]
@@ -189,7 +187,7 @@ class GroupPerceiverEncoder(nn.Module):
         # Run the transformer + Perceiver readout once per graph so nodes only
         # attend within their own shape. Batch dim of 1 keeps the (B, N, C) attention
         # ops happy without padding masks.
-        """" 
+        """
         num_graphs = int(batch_idx.max().item()) + 1
         out = []
         for b in range(num_graphs):
@@ -204,24 +202,23 @@ class GroupPerceiverEncoder(nn.Module):
         """
         graph_splits = torch.bincount(batch_idx).tolist()
         nodes_list = torch.split(scalars, graph_splits, dim=0)
-
-        # 2. Pad them into a single dense tensor: [B, max_N_b, n_scalar]
+        # Pad them into a single dense tensor: [B, max_N_b, n_scalar]
         nodes_padded = pad_sequence(nodes_list, batch_first=True)
 
-        # 3. Create a key_padding_mask to prevent nodes from attending to padding
+        # Create a key_padding_mask to prevent nodes from attending to padding
         # Shape: [B, max_N_b] (True where padding exists)
         B, max_N_b, _ = nodes_padded.shape
         mask = torch.arange(max_N_b, device=scalars.device).unsqueeze(0) >= torch.tensor(graph_splits, device=scalars.device).unsqueeze(1)
 
-        # 4. Run your Transformer blocks (pass the key_padding_mask to your attention blocks)
+        # Run your Transformer blocks (pass the key_padding_mask to your attention blocks)
         for block in self.self_attn:
             nodes_padded = block(nodes_padded, key_padding_mask=mask) 
 
-        # 5. Run Perceiver cross-attention
+        # Run Perceiver cross-attention
         # Pass the same mask to the Perceiver so queries don't attend to padded nodes
         queries = self.latents.unsqueeze(0).expand(B, -1, -1)
         tokens = self.perceiver(nodes_padded, queries, key_padding_mask=mask)
-
+        
         # Optional iterative reduction
         if self.reducer is not None:
             tokens = self.reducer(tokens)                      # [B, n_final, d_shared]
@@ -229,7 +226,11 @@ class GroupPerceiverEncoder(nn.Module):
         # Optional VAE head over the remaining token set.
         if self.vae is not None:
             z, mu, logvar, kl = self.vae(tokens)
+            mu = mu.squeeze(1)
+            mu = self.mu_bn(mu)
+            mu = mu.unsqueeze(1)
+            #mu = self.mu_ln(mu)
             return EncoderOutput(latent = z, mu=mu, logvar=logvar,
                                  aux={"kl": kl, "latent_set": tokens})
-
+       
         return EncoderOutput(latent=tokens)

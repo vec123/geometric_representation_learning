@@ -52,8 +52,11 @@ class TrainingStepper:
         self.optimizer.zero_grad()
 
         enc = self.encode(graph, super_graph)
+        print("enc.mu.shape: ", enc.mu.shape)
+        enc.mu = enc.mu.squeeze(1)
+        print("enc.mu.shape: ", enc.mu.shape)
         print(torch.cdist(enc.mu, enc.mu))     
-        z = torch.randn(4, 16, device=self.device) * 3   # 4 deliberately different codes
+        z = torch.randn(4, enc.mu.shape[1], device=self.device) * 3   # 4 deliberately different codes
         out = self.decoder(z)
         print(torch.cdist(out.reshape(4, -1), out.reshape(4, -1)))  # ~0 => decoder ignores the latent
 

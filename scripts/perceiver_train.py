@@ -41,12 +41,13 @@ from src.learning.helpers import load_dataset, build_training_graph, save_graph_
 # --------------------------------------------------------------------------- #
 # Config
 # --------------------------------------------------------------------------- #
-USE_SUPERNODES = False          # toggle: supernode subset (True) vs full/decimated graph (False)
-N_SUPERNODES   = 50           # n_s, used when USE_SUPERNODES is True
+USE_SUPERNODES = True          # toggle: supernode subset (True) vs full/decimated graph (False)
+N_SUPERNODES   = 10           # n_s, used when USE_SUPERNODES is True
 SAMPLING_MODE  = "fps"         # 'fps' | 'uniform' | 'gaussian'
 DROPOUT_RATE   = 0.8          # uniform node dropout to reduce data-sample size uniformly
 NOISE_STD      = 0.00          #Optional: noise addition
 R_MAX         = 0.25         #radius for graph
+R_SUPERGRPAH = 0.6
 
 # Rebuild the encoder graph from geometry each step (fit geometry, not a fixed graph).
 # False -> build one graph up front and reuse it every step (prebuilt path).
@@ -85,8 +86,9 @@ def main():
     graph, supergraph = build_training_graph(shape_vertices, 
                                  shape_mask,
                                 key,
-                                r_max=R_MAX, 
-                                dropout_rate=DROPOUT_RATE, 
+                                r_max = R_MAX, 
+                                 r_supergraph= R_SUPERGRPAH,
+                                dropout_rate = DROPOUT_RATE, 
                                 n_supernodes = N_SUPERNODES, 
                                 use_supernodes= USE_SUPERNODES)
     
@@ -118,7 +120,7 @@ def main():
         cross_attn_heads=2,
         n_self_layers=1,
         widening_factor=2,
-        reduce_stages=[8,1],
+        reduce_stages=[4,1],
         reduce_heads=2,
         vae_mode="per_token",
         sh_lmax=1,
@@ -137,15 +139,17 @@ def main():
     # The graph fed to the encoder is either
     # rebuilt from geometry each step,
     # or the single prebuilt graph above.
-
     if RESAMPLE_GRAPH:
         loader = ResamplingGraphLoader(
             shape_vertices, shape_mask, build_training_graph, key=key,
-            r_max=RESAMPLE_R_MAX, dropout_rate=RESAMPLE_DROPOUT)
+            r_max=RESAMPLE_R_MAX,
+            r_supergraph=R_SUPERGRPAH,
+            dropout_rate=RESAMPLE_DROPOUT)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT})")
     else:
         loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))
         print("loader: prebuilt graph reused every step")
+
 
     stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE)
     logger = TrainingLogger(log_dir = OUTPUT_DIR)

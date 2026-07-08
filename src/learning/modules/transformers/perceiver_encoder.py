@@ -43,7 +43,7 @@ class PerceiverEncoder(nn.Module):
             is_cross_attention=True,
         )
 
-    def forward(self, input, latent_embeddings=None):
+    def forward(self, input, latent_embeddings=None, key_padding_mask = None):
         if latent_embeddings is None:
             if self.latents is None:
                 raise ValueError(
@@ -51,7 +51,8 @@ class PerceiverEncoder(nn.Module):
                     "to forward(), or construct it with num_latents."
                 )
             latent_embeddings = self.latents.unsqueeze(0).expand(input.shape[0], -1, -1)
-        return self.encoder(input_kv=input, input_q=latent_embeddings)
+        out = self.encoder(input_kv=input, input_q=latent_embeddings, key_padding_mask= key_padding_mask)
+        return out
     
 
 
@@ -103,10 +104,10 @@ class PerceiverReducer(nn.Module):
             for _ in stages
         ]) if self_attend else None
 
-    def forward(self, tokens):
+    def forward(self, tokens, key_padding_mask = None):
         """tokens: [B, K, d] -> [B, stages[-1], d]."""
         for i, cross in enumerate(self.cross):
-            tokens = cross(tokens)                    # owned query -> [B, n_i, d]
+            tokens = cross(tokens, key_padding_mask = key_padding_mask)                    # owned query -> [B, n_i, d]
             if self.self_attend:
                 tokens = self.self_blocks[i](tokens)
         return tokens

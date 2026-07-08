@@ -59,6 +59,7 @@ class FoldingDecoder(nn.Module):
                 f"FoldingDecoder expects a single latent per sample ([B, 1, D]); got "
                 f"{latent.shape[1]} tokens. Reduce/pool the latent set to one token first."
             )
+
         batch_size = latent.shape[0]
 
         latent_raw = torch.zeros_like(latent) if manual_inv else latent

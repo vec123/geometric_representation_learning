@@ -48,13 +48,13 @@ R_MAX         = 0.25         #radius for graph
 R_SUPERGRPAH = 0.6
 # Rebuild the encoder graph from geometry each step (fit geometry, not a fixed graph).
 # False -> build one graph up front and reuse it every step (prebuilt path).
-RESAMPLE_GRAPH   = True
+RESAMPLE_GRAPH   = False
 # When resampling, each may be a fixed float or a (low, high) range sampled per step,
 # e.g. RESAMPLE_R_MAX = (0.2, 0.3) / RESAMPLE_DROPOUT = (0.7, 0.9).
 RESAMPLE_R_MAX   = R_MAX
 RESAMPLE_DROPOUT = DROPOUT_RATE
 
-LATENT_DIM     = 16
+LATENT_DIM     = 8
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
 LEARNING_RATE  = 1e-3
 NUM_STEPS      = 201
@@ -123,7 +123,9 @@ def main():
     if RESAMPLE_GRAPH:
         loader = ResamplingGraphLoader(
             shape_vertices, shape_mask, build_training_graph, key=key,
-            r_max=RESAMPLE_R_MAX, dropout_rate=RESAMPLE_DROPOUT)
+            r_max=RESAMPLE_R_MAX,
+            r_supergraph=R_SUPERGRPAH,
+            dropout_rate=RESAMPLE_DROPOUT)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT})")
     else:
         loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))

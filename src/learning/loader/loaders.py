@@ -24,13 +24,14 @@ class ResamplingGraphLoader:
     that is sampled uniformly per step.
     """
     def __init__(self, vertices, mask, build_fn,
-                  key=None, r_max=0.2, dropout_rate=0.8, use_supernodes = False):
+                  key=None, r_max=0.2, r_supergraph = 0.6, dropout_rate=0.8, use_supernodes = False):
         
         self.vertices = vertices
         self.mask = mask
         self.build_fn = build_fn
         self.key = key
         self.r_max = r_max
+        self.r_supergraph = r_supergraph
         self.dropout_rate = dropout_rate
         self.use_supernodes = use_supernodes
 
@@ -47,6 +48,7 @@ class ResamplingGraphLoader:
             graph, supergraph = self.build_fn(
                 self.vertices, self.mask, key=self.key,
                 r_max=self._sample(self.r_max),
+                r_supergraph = self.r_supergraph,
                 dropout_rate=self._sample(self.dropout_rate),
                 use_supernodes= self.use_supernodes
             )

@@ -25,10 +25,10 @@ class AttentionHead(nn.Module):
         self.v = nn.Linear(input_kv_dim, v_channels_per_head)
         self.dropout = nn.Dropout(attention_prob_dropout_prob)
 
-    def forward(self, input_kv, input_q):
+    def forward(self, input_kv, input_q, key_padding_mask=None):
         query = self.q(input_q)
 
-        if self.is_cross_attention & (input_kv is not None):
+        if self.is_cross_attention and (input_kv is not None):
             key = self.k(input_kv)
             value = self.v(input_kv)
         else:
@@ -37,6 +37,15 @@ class AttentionHead(nn.Module):
 
         scale = 1.0 / math.sqrt(query.size(-1))
         scores = torch.bmm(query, key.transpose(-1, -2)) * scale
+
+        # --- Apply Key Padding Mask ---
+        if key_padding_mask is not None:
+            # key_padding_mask shape: [B, N_kv]
+            # Unsqueeze to [B, 1, N_kv] so it correctly broadcasts over N_q dimension
+            mask = key_padding_mask.unsqueeze(1)
+            # Mask out padded positions by filling them with a very large negative float
+            scores = scores.masked_fill(mask, float('-inf'))
+
         weights = F.softmax(scores, dim=-1)
         weights = self.dropout(weights)
         return torch.bmm(weights, value)
@@ -71,6 +80,6 @@ class MultiHeadAttention(nn.Module):
 
         self.linear = nn.Linear(v_channels, v_channels)
 
-    def forward(self, input, latent_embedding):
-        x = torch.cat([h(input, latent_embedding) for h in self.heads], dim=-1)
+    def forward(self, input, latent_embedding, key_padding_mask = None):
+        x = torch.cat([h(input, latent_embedding, key_padding_mask) for h in self.heads], dim=-1)
         return self.linear(x)

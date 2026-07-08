@@ -53,10 +53,14 @@ class PerceiverLayer(nn.Module):
 
         self.mlp = MLP(v_channels, widening_factor=widening_factor)
 
-    def forward(self, input_kv, input_q):
+    def forward(self, input_kv, input_q, key_padding_mask=None):
         input_kv_norm = self.layer_norm_1(input_kv)
         input_q_norm = self.layer_norm_2(input_q)
-        x_qkv = self.attention(input_kv_norm, input_q_norm)
+        x_qkv = self.attention(
+            input_kv_norm, 
+            input_q_norm, 
+            key_padding_mask=key_padding_mask
+        )
         x_qkv = x_qkv + input_q
         x_qkv = x_qkv + self.mlp(input_q_norm)
         return x_qkv
