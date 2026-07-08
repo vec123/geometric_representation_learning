@@ -184,22 +184,10 @@ class GroupPerceiverEncoder(nn.Module):
         # Split off the invariant scalar channels.
         scalars = scalar_features(x, self.out_irreps)          # [N_total, n_scalar]
 
-        # Run the transformer + Perceiver readout once per graph so nodes only
-        # attend within their own shape. Batch dim of 1 keeps the (B, N, C) attention
+        # Run the transformer + Perceiver readout once per graph
+        #  nodes only attend within their own shape. 
+        # Batch dim of 1 keeps the (B, N, C) attention
         # ops happy without padding masks.
-        """
-        num_graphs = int(batch_idx.max().item()) + 1
-        out = []
-        for b in range(num_graphs):
-            nodes = scalars[batch_idx == b].unsqueeze(0)       # [1, N_b, n_scalar]
-            for block in self.self_attn:
-                nodes = block(nodes)                           # [1, N_b, n_scalar]
-            queries = self.latents.unsqueeze(0)                # [1, n_latent, d_shared]
-            latent = self.perceiver(nodes, queries)            # [1, n_latent, d_shared]
-            out.append(latent)
-
-        tokens = torch.cat(out, dim=0)                         # [B, n_latent, d_shared]
-        """
         graph_splits = torch.bincount(batch_idx).tolist()
         nodes_list = torch.split(scalars, graph_splits, dim=0)
         # Pad them into a single dense tensor: [B, max_N_b, n_scalar]
