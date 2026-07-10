@@ -145,9 +145,9 @@ class GroupEncoder(nn.Module):
             mu = global_add_pool(weights * self.mu_net(scalars), pool_batch, size=num_graphs)
             logvar = torch.log(global_add_pool(weights * self.var_net(scalars), pool_batch, size=num_graphs) + 1e-8)
 
-        mu = mu.unsqueeze(1)
-        logvar = logvar.unsqueeze(1)
-        mu = self.mu_ln(mu)
+        #mu = mu.unsqueeze(1)
+        #logvar = logvar.unsqueeze(1)
+        #mu = self.mu_ln(mu)
 
         #print("mu.shape: ", mu.shape)
         #mu = mu.squeeze(1)

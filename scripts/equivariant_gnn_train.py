@@ -40,9 +40,10 @@ from src.learning.helpers import load_dataset, build_training_graph, save_graph_
 # Config
 # --------------------------------------------------------------------------- #
 USE_SUPERNODES = True          # toggle: supernode subset (True) vs full/decimated graph (False)
-N_SUPERNODES   = 10           # n_s, used when USE_SUPERNODES is True
-SAMPLING_MODE  = "fps"         # 'fps' | 'uniform' | 'gaussian'
 DROPOUT_RATE   = 0.9          # uniform node dropout to reduce data-sample size uniformly
+N_SUPERNODES   = 15           # n_s, used when USE_SUPERNODES is True
+DORPOUT_SAMPLING_MODE  = "uniform"         # 'fps' | 'uniform' | 'gaussian'
+SUPERNODE_SAMPLING_MODE  = "uniform"         # 'fps' | 'uniform' | 'gaussian'
 NOISE_STD      = 0.00          #Optional: noise addition
 R_MAX         = 0.25         #radius for graph
 R_SUPERGRPAH = 0.6
@@ -60,16 +61,18 @@ LEARNING_RATE  = 1e-3
 NUM_STEPS      = 1001
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
+VAL_EVERY      = 100           # run + save validation every N steps
 
 Project_ROOT = get_project_root()
 SHAPE_DATA_ROOT = os.path.join(Project_ROOT, 
                                "Dataset", "vtp_samples",
-                                 "Dataset_faceparts_normalized")
+                                 "Dataset_faceparts_normalized_small")
 VAL_SHAPE_DATA_ROOT =  os.path.join(
-    Project_ROOT, 
-    "Dataset", "vtp_samples", "Dataset_faceparts_normalized")
+    Project_ROOT,
+    "Dataset", "vtp_samples", "val_Dataset_faceparts_normalized")
 
-OUTPUT_DIR = os.path.join(Project_ROOT, "training_logs_50_nose_bridge_ln")
+OUTPUT_DIR = os.path.join(Project_ROOT, 
+                          "training_log_vae")
 
 
 
@@ -88,13 +91,15 @@ def main():
     graph, supergraph = build_training_graph(shape_vertices, 
                                  shape_mask,
                                 key,
-                                r_max=R_MAX,       
-                                dropout_rate=DROPOUT_RATE, 
+                                r_max = R_MAX,       
+                                dropout_rate = DROPOUT_RATE, 
                                 n_supernodes = N_SUPERNODES, 
                                  r_supergraph= R_SUPERGRPAH,
-                                use_supernodes= USE_SUPERNODES)
+                                use_supernodes= USE_SUPERNODES,
+                                sampling_mode_graph=DORPOUT_SAMPLING_MODE,
+                                sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE)
 
-    mode = f"supernodes(n_s={N_SUPERNODES}, {SAMPLING_MODE})" if USE_SUPERNODES else f"full(dropout={DROPOUT_RATE})"
+    mode = f"supernodes(n_s={N_SUPERNODES}, {SUPERNODE_SAMPLING_MODE})" if USE_SUPERNODES else f"full(dropout={DROPOUT_RATE})"
     print(f"graph mode: {mode} | nodes={graph.num_nodes} | shapes={int(graph.batch.max()) + 1}")
     save_graph_vtp(graph,
                    output_dir = os.path.join(OUTPUT_DIR, "init_graphs"),
@@ -106,7 +111,7 @@ def main():
    
     layer_cfg = {
         "input_irreps": "1x0e",
-        "intermediate_irreps": "32x0e + 16x1o+ 4x2o",
+        "intermediate_irreps": "32x0e + 32x0o + 16x1o + 16x1e+ 4x2o+ 4x2e",
         "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
     }
 
@@ -141,25 +146,31 @@ def main():
     
     val_shape_vertices, val_shape_mask = load_dataset(data_path=VAL_SHAPE_DATA_ROOT,
                                             parts = parts)
-    
-    val_graph, val_supergraph = build_training_graph(shape_vertices, 
-                                 shape_mask,
+
+    # Build the validation encoder graph from the VALIDATION geometry (not the training
+    # verts) so the graph and its reconstruction target describe the same shapes.
+    val_graph, val_supergraph = build_training_graph(val_shape_vertices,
+                                 val_shape_mask,
                                 key,
-                                r_max = R_MAX, 
+                                r_max = R_MAX,
                                  r_supergraph= R_SUPERGRPAH,
-                                dropout_rate = DROPOUT_RATE, 
-                                n_supernodes = N_SUPERNODES, 
+                                dropout_rate = DROPOUT_RATE,
+                                n_supernodes = N_SUPERNODES,
                                 use_supernodes= USE_SUPERNODES)
-    
+
     val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
 
 
-    stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE, kl_weight=0.0)
-    logger = TrainingLogger(log_dir = OUTPUT_DIR, val_loader = val_loader)
-    trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader)
+    stepper = TrainingStepper(encoder, decoder,
+                               learning_rate=LEARNING_RATE,
+                               kl_weight=0.1)
+    logger = TrainingLogger(log_dir = OUTPUT_DIR)
+    trainer = TrainingOrchestrator(stepper=stepper, logger=logger, 
+                                   dataloader=loader, val_loader=val_loader)
 
     print(f"----------training on device: {stepper.device}----------")
-    trainer.run(num_steps=NUM_STEPS, log_every=LOG_EVERY, save_every=SAVE_EVERY)
+    trainer.run(num_steps=NUM_STEPS, log_every=LOG_EVERY,
+                 save_every=SAVE_EVERY, val_every=VAL_EVERY)
     print(f"done. outputs in {OUTPUT_DIR}")
     
 

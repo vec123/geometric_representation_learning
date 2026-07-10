@@ -43,18 +43,21 @@ def create_polydata(points, faces=None):
     return polydata
 
 
-def create_polydata_w_lines(points, lines):
+def create_polydata_w_lines(points, lines, verbose = False):
     """
     points: (N, 3) array
     lines: (M, 2) array of index pairs [start_idx, end_idx]
     """
-    print(f"creating poly with {points.shape} positions and {lines.shape} lines")
+    if verbose:
+        print(f"creating poly with {points.shape} positions and {lines.shape} lines")
     if isinstance(points, torch.Tensor):
         points = points.detach().cpu().numpy()
-        print(f"convert to {points.shape}")
+        if verbose:
+            print(f"convert to {points.shape}")
     if isinstance(lines, torch.Tensor):
         lines = lines.detach().cpu().numpy()
-        print(f"convert to {lines.shape}")
+        if verbose:
+            print(f"convert to {lines.shape}")
 
     # Always expect (M, 2): one [start_idx, end_idx] pair per line. Reject the
     # transposed PyG edge_index (2, M) up front — otherwise VTK reinterprets node

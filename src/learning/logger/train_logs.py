@@ -1,5 +1,11 @@
 import os
+import json
+
 import torch
+import matplotlib
+matplotlib.use("Agg")  # headless backend: save PNGs without a display / GUI event loop
+import matplotlib.pyplot as plt
+
 from src.vtk.io import save_vtp
 from src.vtk.create import create_polydata, create_polydata_w_lines
 from src.vtk.fields import add_point_field
@@ -38,11 +44,48 @@ class Logger1:
     
 
 class TrainingLogger:
-    def __init__(self, log_dir="logs", val_loader = None):
+    def __init__(self, log_dir="logs"):
         self.log_dir = log_dir
+        # metric name -> list of (step, value), so train and validation series can be
+        # plotted together and persisted for later inspection.
+        self.history = {}
 
     def log_metrics(self, metrics, step):
         print(f"[step {step}] " + ", ".join(f"{k}={v:.6f}" for k, v in metrics.items()))
+        for name, value in metrics.items():
+            self.history.setdefault(name, []).append((int(step), float(value)))
+        self._save_metrics()
+
+    def _save_metrics(self):
+        """Persist the metric history to JSON so a run's curves survive even if the
+        process dies before the final plot (and can be re-plotted without re-training)."""
+        os.makedirs(self.log_dir, exist_ok=True)
+        with open(os.path.join(self.log_dir, "metrics.json"), "w") as f:
+            json.dump(self.history, f, indent=2)
+
+    def plot_metrics(self, filename="metrics.png"):
+        """Plot every logged metric series (train ``loss``, ``val_loss``, ...) on one
+        step axis and save a PNG next to the logs. No-ops on an empty history."""
+        series = {name: pts for name, pts in self.history.items() if pts}
+        if not series:
+            return
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for name, pts in series.items():
+            steps, values = zip(*pts)
+            ax.plot(steps, values, marker=".", label=name)
+        ax.set_xlabel("step")
+        ax.set_ylabel("loss")
+        # Losses span orders of magnitude early in training; log scale is only valid
+        # when every point is positive (chamfer + laplacian are, but guard anyway).
+        if all(v > 0 for pts in series.values() for _, v in pts):
+            ax.set_yscale("log")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        os.makedirs(self.log_dir, exist_ok=True)
+        path = os.path.join(self.log_dir, filename)
+        fig.savefig(path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  saved metrics plot -> {path}")
 
     def save_checkpoint(self, stepper, step,  directory="checkpoints"):
         checkpoint_dir = os.path.join(self.log_dir, directory)
@@ -55,33 +98,47 @@ class TrainingLogger:
         }, path)
         print(f"  checkpoint -> {path}")
 
-    def visualize_results(self, pred, step, max_num = 4):
+    def visualize_results(self, pred, step, max_num = 4, subdir = "vtk"):
         pred = pred.detach().cpu().numpy()
+        out_dir = os.path.join(self.log_dir, subdir)
         for i in range(pred.shape[0]):
             if i < max_num:
-                path = os.path.join(self.log_dir, "vtk", f"pred_shape{i}_step{step}.vtp")
+                path = os.path.join(out_dir, f"pred_shape{i}_step{step}.vtp")
                 save_vtp(create_polydata(pred[i]), path)
         print(f" saved {max_num} of {pred.shape[0]} prediction VTP(s) at step {step}")
 
-    def visualize_batch(self, batch, pred, step):
+    def visualize_batch(self, batch, pred, step, subdir = "vtk", max_num= 4):
         """Save, for this step, the input graph, the supergraph (if any), the true
         target verts, and the predictions.
 
         ``batch`` is the ``(graph, super_graph, true_verts, mask)`` tuple the trainer
         steps on. Graph tensors are expected on CPU (the trainer moves its own copies to
-        the device), so they render directly.
+        the device), so they render directly. ``subdir`` selects the output folder under
+        ``log_dir`` so train and validation VTPs never overwrite each other at the same
+        step number.
         """
         graph, super_graph, true_verts, mask = batch[0], batch[1], batch[2], batch[3]
-        self._save_graph_vtp(graph, step, name="input_graph", is_supernodes=False)
+        self._save_graph_vtp(graph, step, name="input_graph", 
+                             is_supernodes=False, 
+                             subdir=subdir,
+                             max_num = max_num)
         if super_graph is not None:
-            self._save_graph_vtp(super_graph, step, name="supergraph", is_supernodes=True)
-        self._save_true_verts(true_verts, mask, step)
-        self.visualize_results(pred, step)
+            self._save_graph_vtp(super_graph, step, name="supergraph", 
+                                 is_supernodes=True, 
+                                 subdir=subdir,
+                                  max_num = max_num)
+        self._save_true_verts(true_verts, mask, step, subdir=subdir,  max_num = max_num)
+        self.visualize_results(pred, step, subdir=subdir,  max_num = max_num)
 
-    def _save_true_verts(self, true_verts, mask, step, max_num = 4):
+    def visualize_val_batch(self, batch, pred, step):
+        """Same as ``visualize_batch`` but writes to ``vtk/validation`` so the validation
+        reconstructions live alongside — not on top of — the training ones."""
+        self.visualize_batch(batch, pred, step, subdir=os.path.join("vtk", "validation"))
+
+    def _save_true_verts(self, true_verts, mask, step, max_num = 4, subdir = "vtk"):
         """Save the reconstruction target as a point cloud (no edges), one VTP per shape.
         Padded entries are dropped via ``mask`` so only real vertices are written."""
-        out_dir = os.path.join(self.log_dir, "vtk")
+        out_dir = os.path.join(self.log_dir, subdir)
         tv = true_verts.detach().cpu()
         m = mask.detach().cpu().bool() if mask is not None else None
         for i in range(tv.shape[0]):
@@ -90,10 +147,10 @@ class TrainingLogger:
                 save_vtp(create_polydata(pts), os.path.join(out_dir, f"true_verts_shape{i}_step{step}.vtp"))
         print(f"  saved {max_num} of {tv.shape[0]} true-verts VTP(s) at step {step}")
 
-    def _save_graph_vtp(self, graph, step, name, is_supernodes=False, max_num = 4):
+    def _save_graph_vtp(self, graph, step, name, is_supernodes=False, max_num = 4, subdir = "vtk"):
         """Render one VTP per shape (with edges) for a homogeneous graph, or the merged
         full+super point set with aggregation lines for a bipartite supergraph."""
-        out_dir = os.path.join(self.log_dir, "vtk")
+        out_dir = os.path.join(self.log_dir, subdir)
         num_graphs = int(graph.batch.max().item()) + 1
         for i in range(num_graphs):
             if i < max_num:

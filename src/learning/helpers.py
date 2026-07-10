@@ -15,20 +15,30 @@ from src.graphs.graphs import (
 from src.transforms.padding import pad_vertex_list
 import random
 
-def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"]):
+def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle = True, verbose = True):
     """Load face-part shapes; fall back to tests/data so the script always runs."""
     vertices = []
-    for part in parts:
-        for file in glob.glob(os.path.join(data_path, part, "*.vtp")):
+    if parts is not None:
+        for part in parts:
+            for file in glob.glob(os.path.join(data_path, part, "*.vtp")):
+                if verbose:
+                    print("Loading: ", file)
+                verts, _ = extract_vtp_points_cells(load_vtp(file))
+                vertices.append(verts)
+    else:
+        for file in glob.glob(os.path.join(data_path,  "*.vtp")):
             verts, _ = extract_vtp_points_cells(load_vtp(file))
-            vertices.append(verts)
+            vertices.append(verts)   
             
     if not vertices:
         print("Dataset not found - falling back to tests/data shapes.")
         # Assuming you have a fallback mechanism here
         
     # --- Shuffle the list of vertices ---
-    random.shuffle(vertices)
+    if shuffle == True:
+        if verbose:
+             print("shuffling samples")
+        random.shuffle(vertices)
     
     print("loaded shapes:", [v.shape for v in vertices])
     
@@ -56,7 +66,9 @@ def build_training_graph(vertices, mask,
                          dropout_rate=0.8, 
                          n_supernodes = 10, 
                          r_supergraph = 0.2,
-                         use_supernodes= False):
+                         use_supernodes= False,
+                         sampling_mode_graph = "uniform",
+                         sampling_mode_supernodes =  "uniform"):
     """Build the graph fed to the encoder, per the USE_SUPERNODES toggle, and attach
     a constant 1x0e node feature (the encoder consumes `graph.x`).
 
@@ -65,13 +77,13 @@ def build_training_graph(vertices, mask,
 
     radius_graph = get_graphs_from_vertices(
             vertices, masks=mask, r_max=r_max, dropout_rate=dropout_rate, noise_std=0.0,
-            key=key, sampling_mode="uniform")
+            key=key, sampling_mode=sampling_mode_graph)
 
     if use_supernodes:
         super_graph = build_super_graph(vertices, mask, radius_graph,
                                    num_samples = n_supernodes,
                                     r_max = r_supergraph,
-                                    mode = "fps")
+                                    mode = sampling_mode_supernodes)
     else:
         super_graph = None
     radius_graph.x = torch.ones(radius_graph.num_nodes, 1)

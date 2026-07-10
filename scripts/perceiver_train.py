@@ -63,6 +63,7 @@ LEARNING_RATE  = 1e-3
 NUM_STEPS      = 101
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
+VAL_EVERY      = 20            # run + save validation every N steps
 
 Project_ROOT = get_project_root()
 SHAPE_DATA_ROOT = os.path.join(
@@ -160,25 +161,26 @@ def main():
 
     val_shape_vertices, val_shape_mask = load_dataset(data_path=VAL_SHAPE_DATA_ROOT,
                                             parts = ["mouth", "nose"] )
-  
-  
-    val_graph, val_supergraph = build_training_graph(shape_vertices, 
-                                 shape_mask,
+
+    # Build the validation encoder graph from the VALIDATION geometry (not the training
+    # verts) so the graph and its reconstruction target describe the same shapes.
+    val_graph, val_supergraph = build_training_graph(val_shape_vertices,
+                                 val_shape_mask,
                                 key,
-                                r_max = R_MAX, 
+                                r_max = R_MAX,
                                  r_supergraph= R_SUPERGRPAH,
-                                dropout_rate = DROPOUT_RATE, 
-                                n_supernodes = N_SUPERNODES, 
+                                dropout_rate = DROPOUT_RATE,
+                                n_supernodes = N_SUPERNODES,
                                 use_supernodes= USE_SUPERNODES)
-    
+
     val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
 
     stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE)
-    logger = TrainingLogger(log_dir = OUTPUT_DIR, val_loader = val_loader)
-    trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader)
+    logger = TrainingLogger(log_dir = OUTPUT_DIR)
+    trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader, val_loader=val_loader)
 
     print(f"----------training on device: {stepper.device}----------")
-    trainer.run(num_steps=NUM_STEPS, log_every=LOG_EVERY, save_every=SAVE_EVERY)
+    trainer.run(num_steps=NUM_STEPS, log_every=LOG_EVERY, save_every=SAVE_EVERY, val_every=VAL_EVERY)
     print(f"done. outputs in {OUTPUT_DIR}")
     
 
