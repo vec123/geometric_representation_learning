@@ -45,6 +45,7 @@ from src.learning.modules.transformers.perceiver_encoder import (
 )
 from src.learning.modules.transformers.self_attention import SelfAttentionBlock
 from src.learning.modules.equivariant.interaction import BipartiteSpatialConvolution
+from src.learning.modules.equivariant.transformer import build_equivariant_transformer
 
 class GroupPerceiverEncoder(nn.Module):
     def __init__(
@@ -64,6 +65,8 @@ class GroupPerceiverEncoder(nn.Module):
         interaction_sh_lmax=2,
         n_perceiver_layers = 4,
         perceiver_weight_sharing = True,
+        transformer_type="se3",
+        transformer_cfg=None,
         verbose=False,
     ):
         super().__init__()
@@ -105,7 +108,15 @@ class GroupPerceiverEncoder(nn.Module):
                 in_irreps=self.out_irreps, target_irreps=self.out_irreps,
                 sh_lmax=supernode_sh_lmax, verbose=verbose,
             )
-        
+
+        # Optional equivariant transformer refinement of the pooled features, applied
+        # after supernode aggregation and before the scalar channels are split off.
+        # Selectable backend ('se3' | 'equiformer'); in-place on out_irreps. Disable with
+        # transformer_type=None.
+        self.equi_transformer = build_equivariant_transformer(
+            transformer_type, self.out_irreps, transformer_cfg, verbose=verbose,
+        )
+
         # Scalar self-attention transformer over the nodes (keeps width n_scalar).
         # Standard pre-norm multi-head self-attention block (torch.nn.MultiheadAttention).
         self.self_attn = nn.ModuleList([
@@ -173,6 +184,7 @@ class GroupPerceiverEncoder(nn.Module):
                 print(f"Layer {i} output shape: {x.shape}")
 
         #  Aggregate into supernodes
+        feat_pos = pos
         if supergraph is not None:
             if super_pos is None or super_batch is None or super_edge_index is None:
                 raise ValueError(
@@ -180,6 +192,12 @@ class GroupPerceiverEncoder(nn.Module):
                 )
             x = self.supernode_conv(x, pos, super_pos, super_edge_index)
             batch_idx = super_batch
+            feat_pos = super_pos
+
+        # Equivariant transformer refinement over the pooled set (supernodes or nodes),
+        # on the full irreps BEFORE the scalar channels are split off.
+        if self.equi_transformer is not None:
+            x = self.equi_transformer(x, feat_pos, batch_idx)
 
         # Split off the invariant scalar channels.
         scalars = scalar_features(x, self.out_irreps)          # [N_total, n_scalar]

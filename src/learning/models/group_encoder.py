@@ -5,6 +5,7 @@ from torch_geometric.utils import softmax as scatter_softmax
 from e3nn import o3
 from src.learning.layers.equivariant.Self_Spatial_layer import EquiLayer
 from src.learning.modules.equivariant.interaction import BipartiteSpatialConvolution
+from src.learning.modules.equivariant.transformer import build_equivariant_transformer
 from src.learning.modules.equivariant.irreps_utils import scalar_features, vector_features
 from src.learning.models.encoder_output import EncoderOutput
 from src.learning.modules.transformers.perceiver_encoder import PerceiverReducer
@@ -16,6 +17,8 @@ class GroupEncoder(nn.Module):
                  readout: str = "mean",
                  readout_heads: int = 1,
                  supernode_sh_lmax: int = 4,
+                 transformer_type: str = "se3",
+                 transformer_cfg: dict = None,
                  verbose: bool = False):
 
         super().__init__()
@@ -78,6 +81,14 @@ class GroupEncoder(nn.Module):
                 sh_lmax=supernode_sh_lmax, verbose=verbose,
             )
 
+        # Optional equivariant transformer refinement of the pooled features, applied
+        # after supernode aggregation and before the scalars are filtered out. Selectable
+        # backend ('se3' | 'equiformer'); in-place on out_irreps so nothing downstream
+        # changes. Disable with transformer_type=None.
+        self.equi_transformer = build_equivariant_transformer(
+            transformer_type, self.out_irreps, transformer_cfg, verbose=verbose,
+        )
+
     def forward(self,graph, supergraph):
 
         x = graph.x
@@ -114,6 +125,11 @@ class GroupEncoder(nn.Module):
             feat = x
             pool_batch = batch_idx
             pool_pos = pos
+
+        # Equivariant transformer refinement over the pooled set (supernodes or nodes),
+        # on the full irreps BEFORE the invariant scalars are filtered out.
+        if self.equi_transformer is not None:
+            feat = self.equi_transformer(feat, pool_pos, pool_batch)
 
         #  Global Pooling (VAE Latent Space) over the invariant scalars.
         scalars = scalar_features(feat, self.out_irreps)          # [n_nodes, #0e]
