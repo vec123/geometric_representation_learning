@@ -77,11 +77,11 @@ def test_eval_step_does_not_update_parameters():
     graph, super_graph, true_verts, mask = make_batch()
 
     before = decoder.fold2.weight.detach().clone()
-    loss, points = stepper.eval_step(graph, super_graph, true_verts, mask)
+    pred, loss, recon, kl = stepper.eval_step(graph, super_graph, true_verts, mask)
     after = decoder.fold2.weight.detach()
 
     assert isinstance(loss, float) and math.isfinite(loss), f"bad val loss: {loss}"
-    assert points.shape == (2, 16, 3), f"unexpected decoded shape {tuple(points.shape)}"
+    assert pred.shape == (2, 16, 3), f"unexpected decoded shape {tuple(pred.shape)}"
     assert torch.allclose(before, after), "eval_step must NOT update parameters"
 
 
@@ -106,11 +106,13 @@ class _RecordingStepper:
 
     def train_step(self, *batch):
         self.calls += 1
-        return 0.5, None  # (loss, pred)
+        # (pred, loss, recon, kl, contrastive)
+        return None, 0.5, 0.4, 0.0, 0.0
 
     def eval_step(self, *batch):
         self.eval_calls += 1
-        return 0.25, None  # (loss, pred)
+        # (pred, loss, recon, kl)
+        return None, 0.25, 0.2, 0.0
 
 
 class _RecordingLogger:

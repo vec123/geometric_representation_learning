@@ -240,13 +240,19 @@ def _encoder_inputs(n=8):
     return enc, x, pos, edge_index, batch
 
 
+def _encoder_graph(x, pos, edge_index, batch):
+    """Wrap the mock inputs in the PyG ``Data`` graph the encoder now consumes."""
+    from torch_geometric.data import Data
+    return Data(x=x, pos=pos, edge_index=edge_index, batch=batch)
+
+
 def test_group_encoder_latent_is_invariant():
     """The scalar VAE latent (mu) must not change when the input is rotated."""
     enc, x, pos, edge_index, batch = _encoder_inputs()
     R = o3.rand_matrix()
 
-    (mu, _), _, _, _ = enc(x, pos, edge_index, batch)
-    (mu_rot, _), _, _, _ = enc(x, pos @ R.T, edge_index, batch)
+    mu = enc(_encoder_graph(x, pos, edge_index, batch), None).mu
+    mu_rot = enc(_encoder_graph(x, pos @ R.T, edge_index, batch), None).mu
     assert_close(mu, mu_rot, "GroupEncoder latent mu is not rotation-invariant")
 
 
@@ -255,8 +261,8 @@ def test_group_encoder_frame_is_equivariant_and_orthonormal():
     enc, x, pos, edge_index, batch = _encoder_inputs()
     R = o3.rand_matrix()
 
-    _, R_pred, _, _ = enc(x, pos, edge_index, batch)
-    _, R_pred_rot, _, _ = enc(x, pos @ R.T, edge_index, batch)
+    R_pred = enc(_encoder_graph(x, pos, edge_index, batch), None).rotation
+    R_pred_rot = enc(_encoder_graph(x, pos @ R.T, edge_index, batch), None).rotation
 
     # Orthonormal: R Rᵀ = I
     eye = torch.eye(3).expand_as(R_pred @ R_pred.transpose(-2, -1))

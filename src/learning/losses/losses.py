@@ -66,3 +66,26 @@ def combined_surface_loss(pred_pos, target_pos, target_mask, laplacian_weight=0.
     c_loss = chamfer_loss(pred_pos, target_pos, target_mask)
     l_loss = laplacian_loss(pred_pos)
     return c_loss + (laplacian_weight * l_loss)
+
+
+def contrastive_alignment_loss(z_a, z_b, std_target=1.0, var_weight=1.0, eps=1e-4):
+    """"Same shape, different vertex sampling -> same encoding."
+
+    Pulls the latents of two augmented views of the SAME shapes together (the
+    invariance term), plus a VICReg-style variance hinge that keeps each latent
+    dimension spread across the batch so the encoder can't satisfy the pull by
+    collapsing every shape onto one point. Set ``var_weight=0`` for pure alignment
+    (then reconstruction alone must keep distinct shapes distinct).
+
+    z_a, z_b : ``[B, D]`` latents of the two views, in the SAME shape order.
+    """
+    # Invariance: matched views should map to the same code.
+    invariance = F.mse_loss(z_a, z_b)
+
+    # Variance hinge: per-dim std across the batch should stay >= std_target.
+    def _variance(z):
+        std = torch.sqrt(z.var(dim=0, unbiased=False) + eps)   # [D]
+        return torch.mean(F.relu(std_target - std))
+
+    variance = 0.5 * (_variance(z_a) + _variance(z_b))
+    return invariance + var_weight * variance

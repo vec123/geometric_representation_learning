@@ -51,54 +51,48 @@ def test_group_encoder_rotation():
 
 def test_group_encoder_forward():
     print('\n=== test_group_encoder_forward ===')
-    
+    from torch_geometric.data import Data
+
     # 1. Setup Configuration
     latent_dim = 4
     batch_size = 2
     num_nodes_per_graph = 10
     total_nodes = batch_size * num_nodes_per_graph
-    
+
     layer_cfg = {
         'input_irreps': '1x0e',
         'intermediate_irreps': '2x0e + 2x1o',
         'output_irreps': f'{latent_dim}x0e + 2x1o',
     }
-    
-    encoder = GroupEncoder(latent_dim=latent_dim, irreps_cfg=layer_cfg, verbose=False)
-    encoder.eval() # Set to evaluation mode
 
-    # 2. Mock Data
-    # Features (e.g., scalar field on nodes)
-    # Using torch.randn wrapped in an IrrepsTensor if your EquiLayer requires it,
-    # otherwise a standard tensor if EquiLayer handles wrapping.
-    x = torch.randn(total_nodes, 1) 
-    
-    # Coordinates (x, y, z)
-    pos = torch.randn(total_nodes, 3)
-    
-    # Batch indices (e.g., [0, 0, ..., 1, 1])
-    batch_idx = torch.cat([torch.zeros(num_nodes_per_graph), torch.ones(num_nodes_per_graph)]).long()
-    
-    # Mock Edge Index (simple radius graph connectivity)
+    encoder = GroupEncoder(latent_dim=latent_dim, irreps_cfg=layer_cfg, verbose=False)
+    encoder.eval()  # Set to evaluation mode
+
+    # 2. Mock Data assembled into the PyG ``Data`` graph the encoder now consumes.
+    x = torch.randn(total_nodes, 1)                       # 1x0e node feature
+    pos = torch.randn(total_nodes, 3)                     # xyz coordinates
+    batch_idx = torch.cat([torch.zeros(num_nodes_per_graph),
+                           torch.ones(num_nodes_per_graph)]).long()
     edge_index = torch.stack([
         torch.arange(total_nodes),
-        torch.roll(torch.arange(total_nodes), 1)
+        torch.roll(torch.arange(total_nodes), 1),
     ], dim=0)
+    graph = Data(x=x, pos=pos, edge_index=edge_index, batch=batch_idx)
 
-    # 3. Forward Pass
+    # 3. Forward Pass -- current API: encoder(graph, supergraph) -> EncoderOutput.
     with torch.no_grad():
-        (mu, logvar), rot_matrix, vec_graph, transl = encoder(x, pos, edge_index, batch_idx)
+        out = encoder(graph, None)
 
-    # 4. Assertions
-    print(f"mu shape: {mu.shape}")
-    print(f"rot_matrix shape: {rot_matrix.shape}")
-    print(f"transl shape: {transl.shape}")
-    
-    assert mu.shape == (batch_size, latent_dim)
-    assert logvar.shape == (batch_size, latent_dim)
-    assert rot_matrix.shape == (batch_size, 3, 3)
-    assert transl.shape == (batch_size, 3)
-    
+    # 4. Assertions on the EncoderOutput fields.
+    print(f"mu shape: {out.mu.shape}")
+    print(f"rotation shape: {out.rotation.shape}")
+    print(f"translation shape: {out.translation.shape}")
+
+    assert out.mu.shape == (batch_size, latent_dim)
+    assert out.logvar.shape == (batch_size, latent_dim)
+    assert out.rotation.shape == (batch_size, 3, 3)
+    assert out.translation.shape == (batch_size, 3)
+
     print('test_group_encoder_forward passed successfully.')
 
 

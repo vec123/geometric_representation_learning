@@ -32,14 +32,21 @@ def test_losses():
     print('geometric_clustering_loss:', gc.item())
     assert gc.item() > 0
 
-    pred = torch.arange(12.0, dtype=torch.float32).view(1, 4, 1, 3)
+    # laplacian_loss takes a flat [B, N, 3] cloud (N a perfect square) and grids it
+    # internally; N=4 -> a 2x2 grid.
+    pred = torch.arange(12.0, dtype=torch.float32).view(1, 4, 3)
     lap = laplacian_loss(pred)
     print('laplacian_loss:', lap.item())
     assert lap.item() >= 0
 
-    pred_pos = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]], dtype=torch.float32)
-    target_pos = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]], dtype=torch.float32)
-    target_mask = torch.tensor([[1, 1, 0]], dtype=torch.bool)
+    # pred has a SQUARE number of points (4 -> 2x2 grid): combined_surface_loss adds
+    # laplacian_loss, which grids the prediction and requires N to be a perfect square
+    # (as the FoldingDecoder always emits).
+    pred_pos = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                              [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]], dtype=torch.float32)
+    target_pos = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                                [0.0, 1.0, 0.0], [2.0, 0.0, 0.0]]], dtype=torch.float32)
+    target_mask = torch.tensor([[1, 1, 1, 0]], dtype=torch.bool)
     ch = chamfer_loss(pred_pos, target_pos, target_mask)
     print('chamfer_loss:', ch.item())
     assert ch.item() >= 0

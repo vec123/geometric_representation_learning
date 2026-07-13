@@ -64,9 +64,9 @@ Project_ROOT = get_project_root()
 
 VAL_SHAPE_DATA_ROOT =  os.path.join(
     Project_ROOT,
-    "Dataset", "vtp_samples", "Dataset_faceparts_normalized_small")
+    "Dataset", "vtp_samples", "val_Dataset_faceparts_normalized")
 SHUFFLE = False
-categories =  [0] *2 + [1] * 2
+categories =  [0] *10 + [1] * 10
 US_PATHES_DATA_ROOT =  os.path.join(
     Project_ROOT,
     "Dataset", "US_patches", "patches", "2")
@@ -75,7 +75,7 @@ US_PATHES_DATA_ROOT =  os.path.join(
 CHECKPOINT_PATH = os.path.join(Project_ROOT, 
                                "training_log_vae", 
                                "checkpoints",
-                               "step_1000.pt")
+                               "step_1100.pt")
 
 OUTPUT_DIR = os.path.join(Project_ROOT, 
                                f"Training_Analytics_drop_{DROPOUT_RATE}")
@@ -175,7 +175,7 @@ if __name__ == "__main__":
         - 'umap': Nonlinear, often faster and preserves global structure better than t-SNE.
         """
         data = latents
-        
+
         if method == 'pca':
             reducer = PCA(n_components=n_components)
         elif method == 'tsne':
@@ -183,7 +183,7 @@ if __name__ == "__main__":
             reducer = TSNE(n_components=n_components, perplexity=perplexity, init='pca', learning_rate='auto', random_state=42)
         else:
             raise ValueError("Method must be 'pca', 'tsne', or 'umap'")
-            
+
         return reducer.fit_transform(data)
 
     def plot_latent_scatter(projected_data, categories, save_path):
@@ -192,35 +192,35 @@ if __name__ == "__main__":
         categories: list or array of shape (N_samples,) containing group IDs.
         """
         plt.figure(figsize=(8, 6))
-        
+
         # Create the scatter plot
         # 'c' takes the category labels; 'cmap' defines the color scheme (e.g., 'viridis', 'coolwarm')
         scatter = plt.scatter(
-            projected_data[:, 0], 
-            projected_data[:, 1], 
-            c=categories, 
-            cmap='viridis', 
-            alpha=0.8, 
+            projected_data[:, 0],
+            projected_data[:, 1],
+            c=categories,
+            cmap='viridis',
+            alpha=0.8,
             edgecolors='k',
             s=100
         )
-        
+
         # Create a legend
         legend1 = plt.legend(*scatter.legend_elements(), title="Categories")
         plt.gca().add_artist(legend1)
-        
+
         plt.title("Latent Space Projection by Category")
         plt.xlabel("Principal Component 1")
         plt.ylabel("Principal Component 2")
         plt.grid(True, linestyle='--', alpha=0.6)
-        
+
         plt.savefig(save_path)
 
     # --- Usage ---
     # Assuming 'mu' is a torch.Size([20, 1, 5]) tensor
     projected_mu = project_latents_to_2d(mu.cpu().detach().numpy(), method='tsne', perplexity = 3)
     print("projected_mu.shape: ", projected_mu.shape)
-    
+
     print("categories: ", categories)
     save_path = os.path.join(OUTPUT_DIR, "scatter_latents.png")
     plot_latent_scatter(projected_mu, categories, save_path)
@@ -229,23 +229,23 @@ if __name__ == "__main__":
         # 1. Separate the data based on your known categories
         cat0_data = projected_data[np.array(categories) == 0]
         cat1_data = projected_data[np.array(categories) == 1]
-        
+
         # 2. Calculate the center (centroid) of each cluster
         centroid0 = np.mean(cat0_data, axis=0)
         centroid1 = np.mean(cat1_data, axis=0)
-        
+
         outliers = []
-        
+
         # 3. Check each point to see if it is closer to the "other" cluster
         for i, point in enumerate(projected_data):
             dist0 = np.linalg.norm(point - centroid0)
             dist1 = np.linalg.norm(point - centroid1)
-            
+
             # If category is 0 but it's closer to centroid1 (or vice versa), mark as outlier
             if (categories[i] == 0 and dist1 < dist0) or (categories[i] == 1 and dist0 < dist1):
                 outliers.append(i)
                 print(f"Outlier Found at Index {i}: Category {categories[i]} is closer to the other cluster.")
-                
+
         return outliers
 
     # Run the function

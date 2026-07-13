@@ -50,7 +50,9 @@ def make_batch():
     graph = Data(x=x, pos=pos, edge_index=edge_index, batch=batch)
     true_verts = torch.randn(2, 10, 3)
     padding_mask = torch.ones(2, 10, dtype=torch.bool)
-    return graph, true_verts, padding_mask
+    # 4-tuple the trainer steps on: (graph, super_graph, true_verts, mask). super_graph is
+    # None (the full-graph path); the encoder handles a missing supergraph.
+    return graph, None, true_verts, padding_mask
 
 
 def make_models():
@@ -70,22 +72,21 @@ def make_models():
 def test_training_step_returns_finite_loss_and_points():
     encoder, decoder = make_models()
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device='cpu')
-    graph, true_verts, mask = make_batch()
 
-    loss, points = stepper.train_step(graph, true_verts, mask)
+    pred, loss, recon, kl, contrastive = stepper.train_step(*make_batch())
 
     assert isinstance(loss, float) and math.isfinite(loss), f"bad loss: {loss}"
-    assert points.shape == (2, 16, 3), f"unexpected decoded shape {tuple(points.shape)}"
+    assert pred.shape == (2, 16, 3), f"unexpected decoded shape {tuple(pred.shape)}"
+    assert contrastive == 0.0, "single-view step must carry a zero contrastive term"
 
 
 def test_training_step_updates_parameters():
     """A real gradient must flow through encoder -> decoder and move the weights."""
     encoder, decoder = make_models()
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device='cpu')
-    graph, true_verts, mask = make_batch()
 
     before = decoder.fold2.weight.detach().clone()
-    stepper.train_step(graph, true_verts, mask)
+    stepper.train_step(*make_batch())
     after = decoder.fold2.weight.detach()
 
     assert not torch.allclose(before, after), "optimizer did not update decoder params"
@@ -94,10 +95,30 @@ def test_training_step_updates_parameters():
 def test_training_step_is_stable_over_multiple_steps():
     encoder, decoder = make_models()
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
-    graph, true_verts, mask = make_batch()
+    batch = make_batch()
 
-    losses = [stepper.train_step(graph, true_verts, mask)[0] for _ in range(5)]
+    # train_step returns (pred, loss, recon, kl, contrastive); loss is index 1.
+    losses = [stepper.train_step(*batch)[1] for _ in range(5)]
     assert all(math.isfinite(l) for l in losses), f"non-finite losses: {losses}"
+
+
+def test_two_view_contrastive_step():
+    """A six-tuple (two views) runs the contrastive path: finite loss, a positive
+    contrastive term, and the weights still move."""
+    encoder, decoder = make_models()
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2,
+                              contrastive_weight=0.1, device='cpu')
+    graph, super_graph, true_verts, mask = make_batch()
+
+    before = decoder.fold2.weight.detach().clone()
+    pred, loss, recon, kl, contrastive = stepper.train_step(
+        graph, super_graph, true_verts, mask, graph, super_graph)
+    after = decoder.fold2.weight.detach()
+
+    assert math.isfinite(loss), f"bad loss: {loss}"
+    assert pred.shape == (2, 16, 3), f"unexpected decoded shape {tuple(pred.shape)}"
+    assert contrastive > 0.0, "two-view step should carry a positive contrastive term"
+    assert not torch.allclose(before, after), "optimizer did not update decoder params"
 
 
 # --------------------------------------------------------------------------- #
@@ -109,7 +130,8 @@ class _RecordingStepper:
 
     def train_step(self, *batch):
         self.calls += 1
-        return 0.5, None  # (loss, pred)
+        # (pred, loss, recon, kl, contrastive) -- the arity the orchestrator unpacks.
+        return None, 0.5, 0.4, 0.0, 0.0
 
 
 class _RecordingLogger:
@@ -122,8 +144,11 @@ class _RecordingLogger:
     def save_checkpoint(self, state, step):
         self.saved.append(step)
 
-    def visualize_results(self, aux, step):
+    def visualize_batch(self, batch, pred, step, *args, **kwargs):
         self.visualized.append(step)
+
+    def plot_metrics(self, *args, **kwargs):
+        pass
 
 
 class _InfiniteLoader:

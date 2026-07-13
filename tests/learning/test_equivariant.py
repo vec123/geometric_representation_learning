@@ -19,16 +19,16 @@ except Exception as exc:
 
 def test_equivariant_layer_norm():
     print('=== test_equivariant_layer_norm ===')
+    # Current torch-e3nn convention: features are a plain [N, irreps.dim] tensor; the
+    # module tracks the irreps itself (no IrrepsArray wrapper).
     irreps = '2x0e + 1x1o'
-    irreps_array = o3.IrrepsArray(irreps, torch.randn(2, 5, dtype=torch.float32))
-    layer_norm = EquivariantLayerNorm(irreps, eps=1e-5, affine=True, normalization='component')
+    x = torch.randn(2, o3.Irreps(irreps).dim, dtype=torch.float32)
+    layer_norm = EquivariantLayerNorm(irreps, affine=True, verbose=False)
 
-    output = layer_norm(irreps_array)
+    output = layer_norm(x)
     print('output shape:', output.shape)
-    print('output irreps:', output.irreps)
 
-    assert output.shape == irreps_array.shape
-    assert output.irreps == irreps_array.irreps
+    assert output.shape == x.shape
 
 
 def test_equivariant_attention():
@@ -40,7 +40,7 @@ def test_equivariant_attention():
     irreps_in = '1x0e + 1x1o'
     irreps_out = '1x0e + 1x1o'
     num_nodes = 3
-    node_features = o3.IrrepsArray(irreps_in, torch.randn(num_nodes, 4, dtype=torch.float32))
+    node_features = torch.randn(num_nodes, o3.Irreps(irreps_in).dim, dtype=torch.float32)
     positions = torch.randn(num_nodes, 3, dtype=torch.float32)
     senders = torch.tensor([0, 1, 2], dtype=torch.long)
     receivers = torch.tensor([1, 2, 0], dtype=torch.long)

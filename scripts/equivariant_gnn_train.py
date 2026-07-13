@@ -49,16 +49,24 @@ R_MAX         = 0.25         #radius for graph
 R_SUPERGRPAH = 0.6
 # Rebuild the encoder graph from geometry each step (fit geometry, not a fixed graph).
 # False -> build one graph up front and reuse it every step (prebuilt path).
-RESAMPLE_GRAPH   = False
+RESAMPLE_GRAPH   = True
 # When resampling, each may be a fixed float or a (low, high) range sampled per step,
 # e.g. RESAMPLE_R_MAX = (0.2, 0.3) / RESAMPLE_DROPOUT = (0.7, 0.9).
 RESAMPLE_R_MAX   = R_MAX
 RESAMPLE_DROPOUT = DROPOUT_RATE
 
+# Contrastive objective: "same shape, different vertex sampling -> same encoding".
+# When True, each step draws TWO views of the same shapes and pulls their latents
+# together (this needs resampling, so it selects the two-view loader below). False ->
+# ordinary single-view reconstruction only.
+CONTRASTIVE            = True
+CONTRASTIVE_WEIGHT     = 0.1   # weight of the alignment loss; raise if views don't align, lower if recon stalls
+CONTRASTIVE_VAR_WEIGHT = 1.0   # variance-hinge weight (anti-collapse); set 0 for pure alignment
+
 LATENT_DIM     = 5
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
 LEARNING_RATE  = 1e-3
-NUM_STEPS      = 1001
+NUM_STEPS      = 3001
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
 VAL_EVERY      = 100           # run + save validation every N steps
@@ -72,7 +80,7 @@ VAL_SHAPE_DATA_ROOT =  os.path.join(
     "Dataset", "vtp_samples", "val_Dataset_faceparts_normalized")
 
 OUTPUT_DIR = os.path.join(Project_ROOT, 
-                          "training_log_vae")
+                          "training_log_contrastive_vae")
 
 
 
@@ -119,7 +127,7 @@ def main():
     encoder = GroupEncoder(
         latent_dim=LATENT_DIM, 
         irreps_cfg=layer_cfg, 
-        sh_lmax = 1,
+        sh_lmax = 5,
         readout = "mean",
         readout_heads = 1,
         verbose=False)
@@ -132,7 +140,19 @@ def main():
 
     # Reconstruction target: the full padded shapes. The graph fed to the encoder is
     # either resampled from geometry each step, or the single prebuilt graph above.
-    if RESAMPLE_GRAPH:
+    if CONTRASTIVE:
+        loader = ResamplingGraphLoader(
+            shape_vertices, shape_mask, build_training_graph, key=key,
+            r_max=RESAMPLE_R_MAX,
+            r_supergraph=R_SUPERGRPAH,
+            dropout_rate=RESAMPLE_DROPOUT,
+            use_supernodes=USE_SUPERNODES,
+            two_view=True,
+            n_supernodes=N_SUPERNODES,
+            sampling_mode_graph=DORPOUT_SAMPLING_MODE,
+            sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE)
+        print("loader: two-view contrastive (two fresh samplings of the same shapes per step)")
+    elif RESAMPLE_GRAPH:
         loader = ResamplingGraphLoader(
             shape_vertices, shape_mask, build_training_graph, key=key,
             r_max=RESAMPLE_R_MAX,
@@ -163,7 +183,9 @@ def main():
 
     stepper = TrainingStepper(encoder, decoder,
                                learning_rate=LEARNING_RATE,
-                               kl_weight=0.1)
+                               kl_weight=0.0000,
+                               contrastive_weight=CONTRASTIVE_WEIGHT if CONTRASTIVE else 0.0,
+                               contrastive_var_weight=CONTRASTIVE_VAR_WEIGHT)
     logger = TrainingLogger(log_dir = OUTPUT_DIR)
     trainer = TrainingOrchestrator(stepper=stepper, logger=logger, 
                                    dataloader=loader, val_loader=val_loader)
