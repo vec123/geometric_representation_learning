@@ -93,8 +93,11 @@ def main():
     key = torch.Generator(device="cpu")
     key.manual_seed(0)
 
-    shape_vertices, shape_mask = load_dataset(data_path=SHAPE_DATA_ROOT,
-                                            parts = ["mouth", "nose"] )
+    shape_vertices, shape_mask, shape_areas, shape_normals = load_dataset(
+        data_path=SHAPE_DATA_ROOT,
+        parts=["mouth", "nose"],
+        load_fields=True,
+    )
   
   
     graph, supergraph = build_training_graph(shape_vertices, 
@@ -104,7 +107,9 @@ def main():
                                  r_supergraph= R_SUPERGRPAH,
                                 dropout_rate = DROPOUT_RATE, 
                                 n_supernodes = N_SUPERNODES, 
-                                use_supernodes= USE_SUPERNODES)
+                                use_supernodes= USE_SUPERNODES,
+                                areas=shape_areas,
+                                normals=shape_normals)
     
     mode = f"supernodes(n_s={N_SUPERNODES}, {SAMPLING_MODE})" if USE_SUPERNODES else f"full(dropout={DROPOUT_RATE})"
     print(f"graph mode: {mode} | nodes={graph.num_nodes} | shapes={int(graph.batch.max()) + 1}")
@@ -165,8 +170,11 @@ def main():
         print("loader: prebuilt graph reused every step")
 
 
-    val_shape_vertices, val_shape_mask = load_dataset(data_path=VAL_SHAPE_DATA_ROOT,
-                                            parts = ["mouth", "nose"] )
+    val_shape_vertices, val_shape_mask, val_shape_areas, val_shape_normals = load_dataset(
+        data_path=VAL_SHAPE_DATA_ROOT,
+        parts=["mouth", "nose"],
+        load_fields=True,
+    )
 
     # Build the validation encoder graph from the VALIDATION geometry (not the training
     # verts) so the graph and its reconstruction target describe the same shapes.
@@ -177,7 +185,9 @@ def main():
                                  r_supergraph= R_SUPERGRPAH,
                                 dropout_rate = DROPOUT_RATE,
                                 n_supernodes = N_SUPERNODES,
-                                use_supernodes= USE_SUPERNODES)
+                                use_supernodes= USE_SUPERNODES,
+                                areas=val_shape_areas,
+                                normals=val_shape_normals)
 
     val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
 

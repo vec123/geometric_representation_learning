@@ -45,14 +45,11 @@ class GroupEncoder(nn.Module):
                        target_irreps=intermediate_irreps_str,
                         spatial_sh_lmax = sh_lmax,
                         interaction_sh_lmax = 4, 
-                       verbose=verbose),
-            EquiLayer(in_irreps=intermediate_irreps_str, 
-                      target_irreps=output_irreps_str,
-                      spatial_sh_lmax = sh_lmax,
-                      interaction_sh_lmax = 4,
-                        verbose=verbose)
+                       verbose=verbose)
         ])
         
+        self.final_linear = o3.Linear(intermediate_irreps_str, output_irreps_str)
+
         # MLP Heads (shared by both readouts + the pose head)
         self.mu_net = nn.Linear(latent_dim, latent_dim)
         self.var_net = nn.Sequential(nn.Linear(latent_dim, latent_dim), nn.Softplus())
@@ -60,7 +57,7 @@ class GroupEncoder(nn.Module):
 
         self.mu_bn = nn.BatchNorm1d(latent_dim)
         self.mu_ln = nn.LayerNorm(latent_dim)
-        # Attention-pool readout: one learned query cross-attends to all node scalars,
+        # Pool readout: one learned query cross-attends to all node scalars,
         # collapsing them to a single [latent_dim] token per graph (PerceiverReducer
         # with stages=[1]). The scalar width is latent_dim, so d_shared = latent_dim.
         # The mean-pool path below is kept for ablation (readout="mean").
@@ -95,12 +92,13 @@ class GroupEncoder(nn.Module):
 
         x = graph.x
         pos = graph.pos
+        
         edge_index = graph.edge_index
         batch_idx = graph.batch
-        # Per-node surface measure for area-weighted aggregation (full-graph nodes). Only
-        # used when area_pool is on and the data carries an 'area' attribute -> otherwise
-        # the convs fall back to 1/degree, unchanged.
         node_area = getattr(graph, 'area', None) if self.area_pool else None
+        node_normal = getattr(graph, 'normal', None)
+        if node_normal is not None:
+            x = torch.cat([x, node_normal], dim=-1)
         if supergraph is not None:
             super_pos=supergraph.pos
             super_batch=supergraph.batch
@@ -125,7 +123,7 @@ class GroupEncoder(nn.Module):
                     "use_supernodes=True requires super_pos, super_batch and super_edge_index."
                 )
             feat = self.supernode_conv(x, pos, super_pos, super_edge_index,
-                                       area_src=node_area)  # [S, out_irreps.dim]
+                                       area_src=node_area )  # [S, out_irreps.dim]
             pool_batch = super_batch
             pool_pos = super_pos
             pool_area = getattr(supergraph, 'area', None)          # supernode mass, if provided
@@ -134,9 +132,10 @@ class GroupEncoder(nn.Module):
             pool_batch = batch_idx
             pool_pos = pos
             pool_area = getattr(graph, 'area', None)               # per-vertex area, if provided
-        # Area weighting turns sums over the pooled set into surface integrals; area is an
-        # invariant 0e scalar, so it does not affect equivariance. Off unless area_pool and
-        # an 'area' attribute are present -> falls back to the uniform behavior.
+
+        # Area weighting turns sums over the pooled set into surface integrals; 
+        #  Off unless area_pool and an 'area' attribute are present 
+        # -> falls back to the uniform behavior.
         if not self.area_pool or pool_area is None:
             pool_area = None
         elif pool_area.dim() == 1:
@@ -144,10 +143,14 @@ class GroupEncoder(nn.Module):
 
         # Equivariant transformer refinement over the pooled set (supernodes or nodes),
         # on the full irreps BEFORE the invariant scalars are filtered out.
+        # and before the irreps are reduced to the final encoding set
         if self.equi_transformer is not None:
             feat = self.equi_transformer(feat, pool_pos, pool_batch)
 
-        #  Global Pooling (VAE Latent Space) over the invariant scalars.
+        # reduce to the final encoding set
+        feat = self.final_linear(feat)
+
+        # Global Pooling (VAE Latent Space) over the invariant scalars.
         scalars = scalar_features(feat, self.out_irreps)          # [n_nodes, #0e]
         n_saclars = scalars.shape[1]
         assert n_saclars == self.latent_dim
@@ -182,6 +185,7 @@ class GroupEncoder(nn.Module):
             mu = global_add_pool(weights * self.mu_net(scalars), pool_batch, size=num_graphs)
             logvar = torch.log(global_add_pool(weights * self.var_net(scalars), pool_batch, size=num_graphs) + 1e-8)
 
+        #Optional: Batch and/or Layer Norm
         #mu = mu.unsqueeze(1)
         #logvar = logvar.unsqueeze(1)
         #mu = self.mu_ln(mu)
@@ -191,6 +195,7 @@ class GroupEncoder(nn.Module):
         #mu = self.mu_bn(mu)
         #mu = mu.unsqueeze(1)
         #print("mu.shape: ", mu.shape)
+
         # Equivariant Output (Rotation & Translation)
         vectors = vector_features(feat, self.out_irreps, '1o')    #[n_nodes, n_vec, 3]
         n_vec = vectors.shape[1]

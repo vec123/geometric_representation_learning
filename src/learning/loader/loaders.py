@@ -34,7 +34,8 @@ class ResamplingGraphLoader:
     def __init__(self, vertices, mask, build_fn,
                   key=None, r_max=0.2, r_supergraph = 0.6, dropout_rate=0.8,
                   use_supernodes = False, two_view = False, n_supernodes = 15,
-                  sampling_mode_graph = "uniform", sampling_mode_supernodes = "uniform"):
+                  sampling_mode_graph = "uniform", sampling_mode_supernodes = "uniform",
+                  areas=None, normals=None):
 
         self.vertices = vertices
         self.mask = mask
@@ -48,6 +49,8 @@ class ResamplingGraphLoader:
         self.n_supernodes = n_supernodes
         self.sampling_mode_graph = sampling_mode_graph
         self.sampling_mode_supernodes = sampling_mode_supernodes
+        self.areas = areas
+        self.normals = normals
 
     def _sample(self, value):
         """Return value as-is if scalar, else draw uniformly from a (low, high) range."""
@@ -68,6 +71,8 @@ class ResamplingGraphLoader:
             use_supernodes=self.use_supernodes,
             sampling_mode_graph=self.sampling_mode_graph,
             sampling_mode_supernodes=self.sampling_mode_supernodes,
+            areas=self.areas,
+            normals=self.normals,
         )
 
     def __iter__(self):

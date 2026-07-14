@@ -174,7 +174,6 @@ class EquivariantSpatialConv(MessagePassing):
 
 class SpatialConvolution(EquivariantSpatialConv):
     """Equivariant message passing over a homogeneous graph, with a self-residual.
-
     ``forward`` optionally takes a per-node ``area`` (surface measure); when given, the
     neighbour aggregation is an area-weighted mean instead of a ``1/degree`` mean. Omitting
     it reproduces the original behavior exactly.

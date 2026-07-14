@@ -100,8 +100,11 @@ def main():
     key.manual_seed(0)
 
     parts = ["bridge", "nose"]
-    shape_vertices, shape_mask = load_dataset(data_path=SHAPE_DATA_ROOT,
-                                            parts = parts )
+    shape_vertices, shape_mask, shape_areas, shape_normals = load_dataset(
+        data_path=SHAPE_DATA_ROOT,
+        parts=parts,
+        load_fields=True,
+    )
   
     graph, supergraph = build_training_graph(shape_vertices, 
                                 shape_mask,
@@ -112,7 +115,9 @@ def main():
                                  r_supergraph= R_SUPERGRPAH,
                                 use_supernodes= USE_SUPERNODES,
                                 sampling_mode_graph=DORPOUT_SAMPLING_MODE,
-                                sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE)
+                                sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE,
+                                areas=shape_areas,
+                                normals=shape_normals)
 
     mode = f"supernodes(n_s={N_SUPERNODES}, {SUPERNODE_SAMPLING_MODE})" if USE_SUPERNODES else f"full(dropout={DROPOUT_RATE})"
     print(f"graph mode: {mode} | nodes={graph.num_nodes} | shapes={int(graph.batch.max()) + 1}")
@@ -125,20 +130,29 @@ def main():
                    is_supernodes = True )
    
     layer_cfg = {
-        "input_irreps": "1x0e",
+        "input_irreps": '1x0e + 1x1o',
         "intermediate_irreps": "32x0e + 32x0o + 16x1o + 16x1e+ 4x2o+ 4x2e",
-        "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
+       #  "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
+         "output_irreps": f"{LATENT_DIM}x0e + 2x1o"
     }
 
-        
+    tcfg = {'num_layers': 1, 'num_heads': 2, 'hidden_channels': 8, 'sh_lmax': 2}
+    transformer_type='equiformer'
+    area_pool = True
+
     encoder = GroupEncoder(
         latent_dim=LATENT_DIM, 
         irreps_cfg=layer_cfg, 
-        sh_lmax = 5,
+        sh_lmax = 2,
         readout = "mean",
         readout_heads = 1,
+        supernode_sh_lmax=2,
+        transformer_type=transformer_type,
+        transformer_cfg=tcfg, 
+        area_pool=area_pool,
         verbose=False)
     
+
     decoder = FoldingDecoder(
         num_samples=NUM_SAMPLES,
           latent_dim=LATENT_DIM, 
@@ -157,22 +171,29 @@ def main():
             two_view=True,
             n_supernodes=N_SUPERNODES,
             sampling_mode_graph=DORPOUT_SAMPLING_MODE,
-            sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE)
+            sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE,
+            areas=shape_areas,
+            normals=shape_normals)
         print("loader: two-view contrastive (two fresh samplings of the same shapes per step)")
     elif RESAMPLE_GRAPH:
         loader = ResamplingGraphLoader(
             shape_vertices, shape_mask, build_training_graph, key=key,
             r_max=RESAMPLE_R_MAX,
             r_supergraph=R_SUPERGRPAH,
-            dropout_rate=RESAMPLE_DROPOUT)
+            dropout_rate=RESAMPLE_DROPOUT,
+            areas=shape_areas,
+            normals=shape_normals)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT})")
     else:
         loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))
         print("loader: prebuilt graph reused every step")
 
     
-    val_shape_vertices, val_shape_mask = load_dataset(data_path=VAL_SHAPE_DATA_ROOT,
-                                            parts = parts)
+    val_shape_vertices, val_shape_mask, val_shape_areas, val_shape_normals = load_dataset(
+        data_path=VAL_SHAPE_DATA_ROOT,
+        parts=parts,
+        load_fields=True,
+    )
 
     # Build the validation encoder graph from the VALIDATION geometry (not the training
     # verts) so the graph and its reconstruction target describe the same shapes.
@@ -183,7 +204,9 @@ def main():
                                  r_supergraph= R_SUPERGRPAH,
                                 dropout_rate = DROPOUT_RATE,
                                 n_supernodes = N_SUPERNODES,
-                                use_supernodes= USE_SUPERNODES)
+                                use_supernodes= USE_SUPERNODES,
+                                areas=val_shape_areas,
+                                normals=val_shape_normals)
 
     val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
 

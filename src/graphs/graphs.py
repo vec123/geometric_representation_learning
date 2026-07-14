@@ -105,6 +105,9 @@ def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mod
         sa = torch.zeros(super_graph.num_nodes, dtype=src_area.dtype, device=src_area.device)
         sa.index_add_(0, super_graph.edge_index[0], src_area[super_graph.edge_index[1]])
         super_graph.area = sa
+        super_graph.source_area = src_area
+    if hasattr(full_graph, 'normal') and full_graph.normal is not None:
+        super_graph.source_normal = full_graph.normal
     return super_graph
     
 def build_radius_graph(nodes, batch_vec, r_max=0.4, max_num_neighbors=256):
@@ -160,7 +163,7 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
 
 def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9,
                              noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None,
-                             max_num_neighbors=256, features=None, areas=None):
+                             max_num_neighbors=256, features=None, areas=None, normals=None):
 
     if dropout_rate is not None and num_samples is not None:
         raise ValueError("Please provide either dropout_rate or num_samples, not both.")
@@ -178,6 +181,8 @@ def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rat
         features = features.clone() if isinstance(features, torch.Tensor) else torch.tensor(features, dtype=torch.float32)
     if areas is not None:
         areas = areas.clone() if isinstance(areas, torch.Tensor) else torch.tensor(areas, dtype=torch.float32)
+    if normals is not None:
+        normals = normals.clone() if isinstance(normals, torch.Tensor) else torch.tensor(normals, dtype=torch.float32)
 
     nodes, batch_vec, selected_indices = sample_nodes(v, mask, num_samples, sampling_mode, key, return_indices=True)
     
@@ -187,6 +192,8 @@ def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rat
         graph.x = features[batch_vec, selected_indices]
     if areas is not None:
         graph.area = areas[batch_vec, selected_indices]
+    if normals is not None:
+        graph.normal = normals[batch_vec, selected_indices]
 
     return graph
 

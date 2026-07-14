@@ -156,11 +156,37 @@ class TrainingLogger:
             if i < max_num:
                 if is_supernodes:
                     pos, edges, node_field = get_bipartite_graph(graph, i)
+                    vtp = create_polydata_w_lines(pos, edges)
+                    vtp = add_point_field(vtp, field_data=node_field, field_name="super_node")
+
+                    if hasattr(graph, 'source_area') and graph.source_area is not None:
+                        src_mask = (graph.source_batch == i)
+                        tgt_mask = (graph.batch == i)
+                        src_area = graph.source_area[src_mask]
+                        tgt_area = graph.area[tgt_mask] if hasattr(graph, 'area') and graph.area is not None else torch.zeros((tgt_mask.sum().item(),), device=graph.source_area.device)
+                        area_field = torch.cat([src_area, tgt_area], dim=0).detach().cpu().numpy()
+                        vtp = add_point_field(vtp, area_field.astype(np.float32), field_name="area")
+
+                    if hasattr(graph, 'source_normal') and graph.source_normal is not None:
+                        src_mask = (graph.source_batch == i)
+                        tgt_mask = (graph.batch == i)
+                        src_norm = graph.source_normal[src_mask]
+                        tgt_norm = torch.zeros((tgt_mask.sum().item(), 3), dtype=graph.source_normal.dtype, device=graph.source_normal.device)
+                        normal_field = torch.cat([src_norm, tgt_norm], dim=0).detach().cpu().numpy()
+                        vtp = add_point_field(vtp, normal_field.astype(np.float32), field_name="normal")
+
                 else:
                     pos, edges = get_individual_graph(graph, i)
-                vtp = create_polydata_w_lines(pos, edges)
-                if is_supernodes:
-                    vtp = add_point_field(vtp, field_data=node_field, field_name="super_node")
+                    vtp = create_polydata_w_lines(pos, edges)
+                    if hasattr(graph, 'area') and graph.area is not None:
+                        node_mask = (graph.batch == i)
+                        area_field = graph.area[node_mask].detach().cpu().numpy()
+                        vtp = add_point_field(vtp, area_field.astype(np.float32), field_name="area")
+                    if hasattr(graph, 'normal') and graph.normal is not None:
+                        node_mask = (graph.batch == i)
+                        normal_field = graph.normal[node_mask].detach().cpu().numpy()
+                        vtp = add_point_field(vtp, normal_field.astype(np.float32), field_name="normal")
+
                 save_vtp(vtp, os.path.join(out_dir, f"{name}_shape{i}_step{step}.vtp"))
         print(f"  saved {max_num} of {num_graphs} {name} VTP(s) at step {step}")
 

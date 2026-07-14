@@ -2,10 +2,11 @@
 import os
 import glob
 import torch
+import numpy as np
 
 from src.vtk.io import load_vtp, save_vtp
 from src.vtk.create import create_polydata_w_lines
-from src.vtk.extract import extract_vtp_points_cells
+from src.vtk.extract import extract_vtp_points_cells, extract_vtp_point_fields
 from src.vtk.fields import add_point_field
 from src.graphs.graphs import (
     get_graphs_from_vertices, 
@@ -15,37 +16,58 @@ from src.graphs.graphs import (
 from src.transforms.padding import pad_vertex_list
 import random
 
-def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle = True, verbose = True):
-    """Load face-part shapes; fall back to tests/data so the script always runs."""
-    vertices = []
-    if parts is not None:
-        for part in parts:
-            for file in glob.glob(os.path.join(data_path, part, "*.vtp")):
-                if verbose:
-                    print("Loading: ", file)
-                verts, _ = extract_vtp_points_cells(load_vtp(file))
-                vertices.append(verts)
-    else:
-        for file in glob.glob(os.path.join(data_path,  "*.vtp")):
-            verts, _ = extract_vtp_points_cells(load_vtp(file))
-            vertices.append(verts)   
-            
-    if not vertices:
+def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle=True, verbose=True, load_fields=False):
+    """Load face-part shapes and optional point fields; fall back to tests/data so the script always runs."""
+    samples = []
+    for part in parts if parts is not None else [None]:
+        glob_path = os.path.join(data_path, part, "*.vtp") if part is not None else os.path.join(data_path, "*.vtp")
+        for file in glob.glob(glob_path):
+            if verbose:
+                print("Loading: ", file)
+            polydata = load_vtp(file)
+            verts, _ = extract_vtp_points_cells(polydata)
+            areas = None
+            normals = None
+            if load_fields:
+                fields = extract_vtp_point_fields(polydata, ["area", "normal"])
+                areas = fields.get("area")
+                normals = fields.get("normal")
+                if areas is None and verbose:
+                    print(f"Warning: missing area field in {file}; using ones.")
+                if normals is None and verbose:
+                    print(f"Warning: missing normal field in {file}; using zeros.")
+            samples.append((verts, areas, normals))
+
+    if not samples:
         print("Dataset not found - falling back to tests/data shapes.")
-        # Assuming you have a fallback mechanism here
-        
-    # --- Shuffle the list of vertices ---
-    if shuffle == True:
+
+    if shuffle:
         if verbose:
-             print("shuffling samples")
-        random.shuffle(vertices)
-    
-    print("loaded shapes:", [v.shape for v in vertices])
-    
-    # Now pad the shuffled list
+            print("shuffling samples")
+        random.shuffle(samples)
+
+    vertices = [s[0] for s in samples]
     padded, mask = pad_vertex_list(vertices)
-    
-    return torch.tensor(padded, dtype=torch.float32), torch.tensor(mask, dtype=torch.bool)
+
+    if not load_fields:
+        return torch.tensor(padded, dtype=torch.float32), torch.tensor(mask, dtype=torch.bool)
+
+    num_shapes, max_vertices, _ = padded.shape
+    padded_areas = np.ones((num_shapes, max_vertices), dtype=np.float32)
+    padded_normals = np.zeros((num_shapes, max_vertices, 3), dtype=np.float32)
+    for i, (_, areas, normals) in enumerate(samples):
+        n = vertices[i].shape[0]
+        if areas is not None:
+            padded_areas[i, :n] = np.asarray(areas, dtype=np.float32)
+        if normals is not None:
+            padded_normals[i, :n, :] = np.asarray(normals, dtype=np.float32)
+
+    return (
+        torch.tensor(padded, dtype=torch.float32),
+        torch.tensor(mask, dtype=torch.bool),
+        torch.tensor(padded_areas, dtype=torch.float32),
+        torch.tensor(padded_normals, dtype=torch.float32),
+    )
 """ 
 def load_dataset(data_path = "DATA_ROOT", parts = ["mouth", "nose"] ):
     vertices = []
@@ -70,7 +92,8 @@ def build_training_graph(vertices, mask,
                          sampling_mode_graph = "uniform",
                          sampling_mode_supernodes =  "uniform",
                          features=None,
-                         areas=None):
+                         areas=None,
+                         normals=None):
     """Build the graph fed to the encoder, per the USE_SUPERNODES toggle, and attach
     a constant 1x0e node feature (the encoder consumes `graph.x`).
 
@@ -80,7 +103,7 @@ def build_training_graph(vertices, mask,
     radius_graph = get_graphs_from_vertices(
             vertices, masks=mask, r_max=r_max, dropout_rate=dropout_rate, noise_std=0.0,
             key=key, sampling_mode=sampling_mode_graph,
-            features=features, areas=areas)
+            features=features, areas=areas, normals=normals)
 
     if use_supernodes:
         super_graph = build_super_graph(vertices, mask, radius_graph,
@@ -104,12 +127,38 @@ def save_graph_vtp(graph,
         if sample_idx <= 10:
             if is_supernodes:
                 pos, edges, node_field = get_bipartite_graph(graph, sample_idx)
+                vtp = create_polydata_w_lines(pos, edges)
+                vtp = add_point_field(vtp, field_data=node_field, field_name="super_node")
+
+                if hasattr(graph, 'area') and graph.area is not None:
+                    src_mask = (graph.source_batch == sample_idx)
+                    tgt_mask = (graph.batch == sample_idx)
+                    src_area = graph.area[src_mask] if src_mask.any() else torch.tensor([])
+                    tgt_area = graph.area[tgt_mask] if tgt_mask.any() else torch.tensor([])
+                    area_field = torch.cat([src_area, tgt_area], dim=0).detach().cpu().numpy()
+                    vtp = add_point_field(vtp, area_field.astype(np.float32), field_name="area")
+
+                if hasattr(graph, 'normal') and graph.normal is not None:
+                    src_mask = (graph.source_batch == sample_idx)
+                    tgt_mask = (graph.batch == sample_idx)
+                    src_norm = graph.normal[src_mask] if src_mask.any() else torch.empty((0, 3), device=graph.normal.device)
+                    tgt_norm = torch.zeros((tgt_mask.sum().item(), 3), dtype=graph.normal.dtype, device=graph.normal.device)
+                    normal_field = torch.cat([src_norm, tgt_norm], dim=0).detach().cpu().numpy()
+                    vtp = add_point_field(vtp, normal_field.astype(np.float32), field_name="normal")
+
             else:
                 pos, edges = get_individual_graph(graph, sample_idx)
+                vtp = create_polydata_w_lines(pos, edges)
+                if hasattr(graph, 'area') and graph.area is not None:
+                    node_mask = (graph.batch == sample_idx)
+                    area_field = graph.area[node_mask].detach().cpu().numpy()
+                    vtp = add_point_field(vtp, area_field.astype(np.float32), field_name="area")
+                if hasattr(graph, 'normal') and graph.normal is not None:
+                    node_mask = (graph.batch == sample_idx)
+                    normal_field = graph.normal[node_mask].detach().cpu().numpy()
+                    vtp = add_point_field(vtp, normal_field.astype(np.float32), field_name="normal")
+
             save_path = os.path.join(output_dir, f"init_graph_{sample_idx}.vtp")
-            vtp = create_polydata_w_lines(pos, edges)
-            if is_supernodes:
-                vtp = add_point_field(vtp, field_data=node_field,  field_name="super_node")
             save_vtp(vtp, save_path)
 
 
