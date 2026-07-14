@@ -68,7 +68,9 @@ def build_training_graph(vertices, mask,
                          r_supergraph = 0.2,
                          use_supernodes= False,
                          sampling_mode_graph = "uniform",
-                         sampling_mode_supernodes =  "uniform"):
+                         sampling_mode_supernodes =  "uniform",
+                         features=None,
+                         areas=None):
     """Build the graph fed to the encoder, per the USE_SUPERNODES toggle, and attach
     a constant 1x0e node feature (the encoder consumes `graph.x`).
 
@@ -77,7 +79,8 @@ def build_training_graph(vertices, mask,
 
     radius_graph = get_graphs_from_vertices(
             vertices, masks=mask, r_max=r_max, dropout_rate=dropout_rate, noise_std=0.0,
-            key=key, sampling_mode=sampling_mode_graph)
+            key=key, sampling_mode=sampling_mode_graph,
+            features=features, areas=areas)
 
     if use_supernodes:
         super_graph = build_super_graph(vertices, mask, radius_graph,
@@ -86,9 +89,11 @@ def build_training_graph(vertices, mask,
                                     mode = sampling_mode_supernodes)
     else:
         super_graph = None
-    radius_graph.x = torch.ones(radius_graph.num_nodes, 1)
-    if super_graph is not None:
-     super_graph.x = torch.ones(super_graph.num_nodes, 1)
+
+    if not hasattr(radius_graph, 'x') or radius_graph.x is None:
+        radius_graph.x = torch.ones(radius_graph.num_nodes, 1)
+    if super_graph is not None and (not hasattr(super_graph, 'x') or super_graph.x is None):
+        super_graph.x = torch.ones(super_graph.num_nodes, 1)
 
     return radius_graph, super_graph
 

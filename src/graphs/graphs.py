@@ -27,12 +27,14 @@ def apply_noise_and_masking(vertices, masks=None, noise_std=0.0, dropout_rate=0.
     return vertices, mask
 
 
-def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None):
+def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None, return_indices=False):
     """
     Samples nodes from batches of vertices. 
     Returns: 
         valid_nodes: Tensor [Total_Sampled_Nodes, 3]
         batch_vec: Tensor [Total_Sampled_Nodes]
+        selected_indices (optional): Tensor [Total_Sampled_Nodes] of indices into the
+            original per-batch vertex array.
     """
     batch_size = vertices.shape[0]
     device = vertices.device
@@ -40,10 +42,12 @@ def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None):
     
     selected_nodes_list = []
     batch_vec_list = []
+    selected_indices_list = []
 
     for i in range(batch_size):
         # 1. Extract valid nodes for this batch
-        nodes = vertices[i, mask[i]]
+        valid_indices = mask[i].nonzero(as_tuple=True)[0]
+        nodes = vertices[i, valid_indices]
         num_available = nodes.size(0)
 
         if num_available == 0:
@@ -77,8 +81,14 @@ def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None):
         selected = nodes[idx]
         selected_nodes_list.append(selected)
         batch_vec_list.append(torch.full((selected.size(0),), i, device=device))
+        if return_indices:
+            selected_indices_list.append(valid_indices[idx])
 
     # 4. Final concatenation ensures x.size(0) == batch_vec.numel()
+    if return_indices:
+        return (torch.cat(selected_nodes_list, dim=0),
+                torch.cat(batch_vec_list, dim=0),
+                torch.cat(selected_indices_list, dim=0))
     return torch.cat(selected_nodes_list, dim=0), torch.cat(batch_vec_list, dim=0)
 
 
@@ -90,6 +100,11 @@ def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mod
     super_graph = build_bipartite_graph(
             full_graph.pos, full_graph.batch, super_nodes, super_batch, r_max=r_max
     )
+    if hasattr(full_graph, 'area') and full_graph.area is not None:
+        src_area = full_graph.area
+        sa = torch.zeros(super_graph.num_nodes, dtype=src_area.dtype, device=src_area.device)
+        sa.index_add_(0, super_graph.edge_index[0], src_area[super_graph.edge_index[1]])
+        super_graph.area = sa
     return super_graph
     
 def build_radius_graph(nodes, batch_vec, r_max=0.4, max_num_neighbors=256):
@@ -145,7 +160,7 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
 
 def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9,
                              noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None,
-                             max_num_neighbors=256):
+                             max_num_neighbors=256, features=None, areas=None):
 
     if dropout_rate is not None and num_samples is not None:
         raise ValueError("Please provide either dropout_rate or num_samples, not both.")
@@ -159,11 +174,19 @@ def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rat
     v, mask = apply_noise_and_masking(v, masks, noise_std, dropout_rate or 0.0, key)
     
     #  Sample
-    nodes, batch_vec = sample_nodes(v, mask, num_samples, sampling_mode, key)
+    if features is not None:
+        features = features.clone() if isinstance(features, torch.Tensor) else torch.tensor(features, dtype=torch.float32)
+    if areas is not None:
+        areas = areas.clone() if isinstance(areas, torch.Tensor) else torch.tensor(areas, dtype=torch.float32)
+
+    nodes, batch_vec, selected_indices = sample_nodes(v, mask, num_samples, sampling_mode, key, return_indices=True)
     
     #  Build Graph
     graph = build_radius_graph(nodes, batch_vec, r_max, max_num_neighbors=max_num_neighbors)
-
+    if features is not None:
+        graph.x = features[batch_vec, selected_indices]
+    if areas is not None:
+        graph.area = areas[batch_vec, selected_indices]
 
     return graph
 

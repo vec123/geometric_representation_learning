@@ -47,14 +47,15 @@ class EquiLayer(nn.Module):
         # 4. Layer Norm
         self.norm = EquivariantLayerNorm(self.target_irreps, verbose=verbose)
 
-    def forward(self, x, pos, edge_index):
-        # x is node features, pos is node positions, edge_index for graph structure
-        
-        # Self Interaction
+    def forward(self, x, pos, edge_index, area=None):
+        # x is node features, pos is node positions, edge_index for graph structure.
+        # area (optional): per-node surface measure -> area-weighted message aggregation.
+
+        # Self Interaction (node-wise; no aggregation, so area does not apply here)
         h = self.self_int(x)
-        
+
         # Spatial Convolution
-        msg = self.spatial_conv(h, pos, edge_index)
+        msg = self.spatial_conv(h, pos, edge_index, area=area)
         
         # Skip Connection
         if self.res_proj is not None:

@@ -47,16 +47,55 @@ def neighborhood_normal(points):
     return normal / np.linalg.norm(normal,axis=-1, keepdims=True)
 
 def mesh_vertex_normals(verts, faces):
-    # numpy in / out
-    #face_n = toNP(face_normals(torch.tensor(verts), torch.tensor(faces))) # ugly torch <---> numpy
-    face_n = faces
-    vertex_normals = np.zeros(verts.shape)
+    # NumPy implementation of area-weighted mesh vertex normals.
+    # Each triangle contributes its face normal to its vertices.
+    verts = np.asarray(verts, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    if faces.size == 0:
+        return np.zeros_like(verts)
+
+    v0 = verts[faces[:, 0]]
+    v1 = verts[faces[:, 1]]
+    v2 = verts[faces[:, 2]]
+    face_normals = np.cross(v1 - v0, v2 - v0)
+
+    vertex_normals = np.zeros_like(verts, dtype=np.float64)
     for i in range(3):
-        np.add.at(vertex_normals, faces[:,i], face_n)
+        np.add.at(vertex_normals, faces[:, i], face_normals)
 
-    vertex_normals = vertex_normals / (np.linalg.norm(vertex_normals,axis=-1,keepdims=True) +1e-8)
-
+    norms = np.linalg.norm(vertex_normals, axis=-1, keepdims=True)
+    vertex_normals = vertex_normals / np.clip(norms, 1e-12, None)
     return vertex_normals
+
+
+def vertex_areas(verts, faces=None):
+    """Compute per-vertex area weights for a mesh or point cloud.
+
+    If mesh faces are provided, each triangle contributes one third of its
+    area to each incident vertex. If no faces are provided, the point cloud is
+    triangulated with a local tangent-plane method.
+    """
+    verts = np.asarray(verts, dtype=np.float64)
+    if faces is None:
+        from src.preprocessing.mesh_from_points import SurfaceTriangulator
+        tri = SurfaceTriangulator(k=16)
+        out = tri.process(verts)
+        return out["areas"]
+
+    faces = np.asarray(faces, dtype=np.int64)
+    if faces.size == 0:
+        from src.preprocessing.mesh_from_points import SurfaceTriangulator
+        tri = SurfaceTriangulator(k=16)
+        out = tri.process(verts)
+        return out["areas"]
+
+    a = np.zeros(len(verts), dtype=np.float64)
+    v0 = verts[faces[:, 0]]
+    v1 = verts[faces[:, 1]]
+    v2 = verts[faces[:, 2]]
+    face_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+    np.add.at(a, faces.reshape(-1), np.repeat(face_area / 3.0, 3))
+    return a
 
 def find_knn_numpy(points_source, points_target, k, largest=False, omit_diagonal=False, method='brute'):
     """

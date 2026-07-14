@@ -1,0 +1,17 @@
+{
+  "mode": "remote",
+  "device": "cuda",
+  "seed": 0,
+  "epochs": 25,
+  "classes": [
+    "sphere",
+    "torus",
+    "cylinder",
+    "saddle"
+  ],
+  "test_accuracy": 1.0,
+  "rotation_invariance_max_mu_diff": 0.22805404663085938,
+  "rotation_prediction_agreement": 1.0,
+  "resampling_mean_rel_drift": 0.4490976072847843,
+  "resampling_class_agreement": 0.78125
+}

@@ -23,9 +23,9 @@ class GatingBlock(nn.Module):
         x = self.dense1(x)
         x = F.silu(x)
         x = self.dense2(x)
-        
+
         return x
-  
+
 
 class SelfInteraction(nn.Module):
     def __init__(self, in_irreps, target_irreps, sh_lmax = 1, verbose=True):
@@ -84,37 +84,50 @@ class SelfInteraction(nn.Module):
             print("self.linear_out.irreps_out: ", self.linear_out.irreps_out)
             print("--------------Finished --------------")
         return out
-    
 
-class SpatialConvolution(MessagePassing):
+
+class EquivariantSpatialConv(MessagePassing):
+    """Shared base for equivariant spatial message passing (Tensor-Field-Network style).
+
+    Builds the per-edge equivariant message ``lin_msg( [x_j ⊕ (x_j ⊗ Y(rel_pos))] * gate )``
+    and aggregates it at the receivers with an AREA-WEIGHTED mean::
+
+        out_i = ( Σ_j a_j · m_ij ) / ( Σ_j a_j )
+
+    where ``a_j`` is the sender's surface area (mass). Passing no area is equivalent to
+    ``a_j ≡ 1``, which is exactly the plain ``1/degree`` mean — so the original numerics are
+    reproduced when areas are absent. Area is an invariant (0e) scalar, so weighting the
+    messages by it preserves equivariance.
+
+    Subclasses provide only ``forward`` (the graph convention): ``SpatialConvolution`` is a
+    homogeneous graph with a self-residual; ``BipartiteSpatialConvolution`` is a bipartite
+    source→target graph with featureless targets.
+    """
+
     def __init__(self, in_irreps, target_irreps, sh_lmax=4, r_max=2, verbose=True):
-        super().__init__(aggr='add') # "add" aggregation
+        super().__init__(aggr='add')  # "add" aggregation; normalization is explicit below
         self.verbose = verbose
         self.in_irreps = o3.Irreps(in_irreps)
         self.target_irreps = o3.Irreps(target_irreps)
         self.sh_lmax = sh_lmax
-        
 
-        # Spherical Harmonics
+        # Spherical Harmonics of the relative position (geometric part of the message).
         self.sh = o3.SphericalHarmonics([l for l in range(1, sh_lmax + 1)], normalize=True)
-        
+
         # Tensor Product for messages; weights supplied per-edge by the radial net.
         self.tp = o3.FullyConnectedTensorProduct(
             self.in_irreps, self.sh.irreps_out, self.in_irreps,
             shared_weights=False, internal_weights=False,
         )
         self.num_weights = self.tp.weight_numel
-        # Radial network: message weights as a function of edge length (scalar -> weights).
-        #self.weight_net = nn.Sequential(
-        #    nn.Linear(1, 16), nn.SiLU(), nn.Linear(16, self.num_weights)
-        #)
+        # Radial network: message weights as a function of edge length.
         self.radial = RadialFourier(num_freqs=8, r_max=r_max)
         self.weight_net = nn.Sequential(
             nn.Linear(2 * 8, 32), nn.SiLU(), nn.Linear(32, self.num_weights)
         )
         # Message features x_j ⊕ (x_j ⊗ Y); order preserved to match torch.cat.
         self.geo_irreps = self.in_irreps + self.in_irreps
-        self.lin_msg = o3.Linear(self.geo_irreps, target_irreps)
+        self.lin_msg = o3.Linear(self.geo_irreps, self.target_irreps)
 
         # Gating: one gate per message irrep, from sender + receiver invariant scalars.
         self.num_scalars = self.in_irreps.count("0e")
@@ -124,34 +137,13 @@ class SpatialConvolution(MessagePassing):
             out_dim=self.geo_irreps.num_irreps,
         )
 
-
-    def forward(self, x, pos, edge_index):
-        # 1. In-degree of each receiver node (edge_index[1]) for 1/k normalization.
-        _, col = edge_index
-        ones = torch.ones(col.size(0), device=x.device)
-        degree = scatter(ones, col, dim=0, dim_size=x.size(0), reduce='add')
-
-        # 2. Propagate (messages aggregated at the receivers).
-        out = self.propagate(edge_index, x=x, pos=pos)
-
-        # 3. Normalize by 1/k (per-node invariant scalar); guard isolated nodes.
-        norm = 1.0 / torch.clamp(degree, min=1.0)
-        if self.verbose:
-            print("--------------SpatialConvolution --------------")
-            print("target_irreps: ", self.target_irreps)
-            print("out.shape: ", out.shape)
-            print("self.lin_msg.irreps_out: ", self.lin_msg.irreps_out)
-            print("--------------Finished --------------")
-        return out * norm.view(-1, 1)  # Scaling the aggregated features
-
-    def message(self, x_i, x_j, pos_i, pos_j):
-        # x_j: sender features, x_i: receiver features
+    def message(self, x_i, x_j, pos_i, pos_j, area_j):
+        # x_j: sender features, x_i: receiver features; area_j: sender area (or ones).
         rel_pos = pos_j - pos_i
         dist = torch.norm(rel_pos, dim=-1, keepdim=True)
         edge_sh = self.sh(rel_pos)
 
         # Equivariant message: (x_j ⊗ Y) with radial weights, concatenated with x_j.
-        #weights = self.weight_net(dist)
         weights = self.weight_net(self.radial(dist))
         tp_msg = self.tp(x_j, edge_sh, weights)
         geo_features = torch.cat([x_j, tp_msg], dim=-1)
@@ -162,107 +154,95 @@ class SpatialConvolution(MessagePassing):
         gate = torch.sigmoid(self.gate_net(torch.cat([x_i_0e, x_j_0e], dim=-1)))
         gate = expand_per_irrep_gate(gate, self.geo_irreps)
 
-        return self.lin_msg(geo_features * gate)
+        # Weight the message by the sender's area (a_j ≡ 1 -> the ordinary message).
+        return self.lin_msg(geo_features * gate) * area_j
+
+    @staticmethod
+    def _node_area(area, n_nodes, ref):
+        """Per-node area column ``[n, 1]`` on ref's device/dtype; ``None`` -> ones."""
+        if area is None:
+            return torch.ones(n_nodes, 1, device=ref.device, dtype=ref.dtype)
+        return area.reshape(-1, 1).to(device=ref.device, dtype=ref.dtype)
+
+    @staticmethod
+    def _inv_area_norm(area_edge, receiver_index, dim_size):
+        """``1 / Σ_j a_j`` per receiver, clamped exactly like the original ``1/degree``.
+        ``area_edge`` is the per-edge sender area ``[E]``; all-ones gives ``1/degree``."""
+        Z = scatter(area_edge, receiver_index, dim=0, dim_size=dim_size, reduce='add')
+        return (1.0 / torch.clamp(Z, min=1.0)).view(-1, 1)
+
+
+class SpatialConvolution(EquivariantSpatialConv):
+    """Equivariant message passing over a homogeneous graph, with a self-residual.
+
+    ``forward`` optionally takes a per-node ``area`` (surface measure); when given, the
+    neighbour aggregation is an area-weighted mean instead of a ``1/degree`` mean. Omitting
+    it reproduces the original behavior exactly.
+    """
+
+    def forward(self, x, pos, edge_index, area=None):
+        src, dst = edge_index[0], edge_index[1]
+        area_node = self._node_area(area, x.size(0), x)             # [N, 1]
+
+        # Aggregate area-weighted messages at the receivers (self-residual added in update).
+        out = self.propagate(edge_index, x=x, pos=pos, area=area_node)
+        inv = self._inv_area_norm(area_node[src].view(-1), dst, x.size(0))
+        if self.verbose:
+            print("--------------SpatialConvolution --------------")
+            print("target_irreps: ", self.target_irreps)
+            print("out.shape: ", out.shape)
+            print("self.lin_msg.irreps_out: ", self.lin_msg.irreps_out)
+            print("--------------Finished --------------")
+        return out * inv  # Scale the (aggregated + residual) features by 1 / Σ a_j
 
     def update(self, aggr_out, x):
-        # aggr_out is the sum of messages (v_tilde)
-        # Normalization by degree (k)
-        # Assuming degree is pre-computed or retrieved via count
-        return aggr_out + x # Simplified residual
+        # aggr_out is the (area-weighted) sum of messages; add a simplified self-residual.
+        return aggr_out + x
 
 
-class BipartiteSpatialConvolution(MessagePassing):
+class BipartiteSpatialConvolution(EquivariantSpatialConv):
     """Equivariant message passing over a bipartite (source -> target) graph.
 
     Aggregates SOURCE node features (e.g. full-graph nodes, carrying ``in_irreps``)
     onto TARGET nodes (e.g. supernodes) that have positions but NO input features.
     The message is the same equivariant construction as ``SpatialConvolution``
     (``x_j (x) Y`` with a per-edge radial-net weight, concatenated with ``x_j`` and
-    per-irrep gated), summed at the targets and normalized by in-degree. There is no
-    self-residual, since the targets are featureless.
+    per-irrep gated), summed at the targets and normalized by (area-weighted) in-degree.
+    There is no self-residual, since the targets are featureless.
 
     ``forward`` takes ``edge_index`` in the bipartite ``Data`` convention produced by
     ``build_bipartite_graph`` — ``row 0 = target (supernode)``, ``row 1 = source
     (full node)`` — and flips it internally to PyG's ``source_to_target`` layout.
     """
-    def __init__(self, in_irreps, target_irreps, sh_lmax=4, r_max=2, verbose=False):
-        super().__init__(aggr='add', flow='source_to_target')
-        self.verbose = verbose
-        self.in_irreps = o3.Irreps(in_irreps)
-        self.target_irreps = o3.Irreps(target_irreps)
-        self.sh_lmax = sh_lmax
 
-        self.sh = o3.SphericalHarmonics([l for l in range(1, sh_lmax + 1)], normalize=True)
-        self.tp = o3.FullyConnectedTensorProduct(
-            self.in_irreps, self.sh.irreps_out, self.in_irreps,
-            shared_weights=False, internal_weights=False,
-        )
-        self.num_weights = self.tp.weight_numel
-        #self.weight_net = nn.Sequential(
-        #    nn.Linear(1, 16), nn.SiLU(), nn.Linear(16, self.num_weights)
-        #)
-        self.radial = RadialFourier(num_freqs=8, r_max=r_max)
-        self.weight_net = nn.Sequential(
-            nn.Linear(2 * 8, 32), nn.SiLU(), nn.Linear(32, self.num_weights)
-        )
-        self.geo_irreps = self.in_irreps + self.in_irreps
-        self.lin_msg = o3.Linear(self.geo_irreps, self.target_irreps)
-
-        self.num_scalars = self.in_irreps.count("0e")
-        self.gate_net = GatingBlock(
-            input_dim=2 * self.num_scalars,
-            hidden_dim=64,
-            out_dim=self.geo_irreps.num_irreps,
-        )
-
-    def forward(self, x_src, pos_src, pos_dst, edge_index):
+    def forward(self, x_src, pos_src, pos_dst, edge_index, area_src=None):
         """
         x_src     : [F, in_irreps.dim]  source (full-node) features
         pos_src   : [F, 3]              source positions
         pos_dst   : [S, 3]              target (supernode) positions
         edge_index: [2, E] with row0=target (super), row1=source (full)
                     (the build_bipartite_graph convention)
+        area_src  : [F] optional per-source-node area (surface measure); None -> 1/degree
         returns   : [S, target_irreps.dim]  supernode features
         """
         num_target = pos_dst.size(0)
         # Flip to PyG source_to_target: [source (full), target (super)].
         edge_index = torch.stack([edge_index[1], edge_index[0]], dim=0)
+        src, col = edge_index[0], edge_index[1]
 
-        # In-degree of each target (row1 after flip) for 1/k normalization.
-        _, col = edge_index
-        ones = torch.ones(col.size(0), device=x_src.device)
-        degree = scatter(ones, col, dim=0, dim_size=num_target, reduce='add')
-
-        # Targets are featureless; a zero placeholder feeds the receiver-scalar gate.
+        area_node = self._node_area(area_src, x_src.size(0), x_src)          # [F, 1]
+        # Targets are featureless; zero placeholders feed the receiver-scalar gate + area.
         x_dst = x_src.new_zeros(num_target, self.in_irreps.dim)
+        area_dst = x_src.new_ones(num_target, 1)                            # unused (target side)
 
         out = self.propagate(
             edge_index, x=(x_src, x_dst), pos=(pos_src, pos_dst),
-            size=(x_src.size(0), num_target),
+            area=(area_node, area_dst), size=(x_src.size(0), num_target),
         )
-        norm = 1.0 / torch.clamp(degree, min=1.0)
+        inv = self._inv_area_norm(area_node[src].view(-1), col, num_target)
         if self.verbose:
             print("--------------BipartiteSpatialConvolution --------------")
             print("in_irreps: ", self.in_irreps, " target_irreps: ", self.target_irreps)
             print("out.shape: ", out.shape)
             print("--------------Finished --------------")
-        return out * norm.view(-1, 1)
-
-    def message(self, x_j, x_i, pos_i, pos_j):
-        # x_j: source (full) features, x_i: target (super) placeholder (zeros)
-        rel_pos = pos_j - pos_i
-        dist = torch.norm(rel_pos, dim=-1, keepdim=True)
-        edge_sh = self.sh(rel_pos)
-
-        #weights = self.weight_net(dist)
-        weights = self.weight_net(self.radial(dist))
-        tp_msg = self.tp(x_j, edge_sh, weights)
-        geo_features = torch.cat([x_j, tp_msg], dim=-1)
-
-        # Per-irrep gate from sender + (zero) receiver invariant scalars.
-        x_i_0e = scalar_features(x_i, self.in_irreps)
-        x_j_0e = scalar_features(x_j, self.in_irreps)
-        gate = torch.sigmoid(self.gate_net(torch.cat([x_i_0e, x_j_0e], dim=-1)))
-        gate = expand_per_irrep_gate(gate, self.geo_irreps)
-
-        return self.lin_msg(geo_features * gate)
+        return out * inv

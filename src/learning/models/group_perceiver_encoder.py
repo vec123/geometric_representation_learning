@@ -67,10 +67,12 @@ class GroupPerceiverEncoder(nn.Module):
         perceiver_weight_sharing = True,
         transformer_type="se3",
         transformer_cfg=None,
+        area_pool=False,
         verbose=False,
     ):
         super().__init__()
         self.verbose = verbose
+        self.area_pool = area_pool
         self.perceiver_weight_sharing = perceiver_weight_sharing
         self.n_latent = n_latent
         self.d_shared = d_shared
@@ -166,10 +168,13 @@ class GroupPerceiverEncoder(nn.Module):
         pos = graph.pos
         edge_index = graph.edge_index
         batch_idx = graph.batch
+        # Per-node surface measure for area-weighted aggregation; None unless area_pool is
+        # on and the data carries 'area' -> convs fall back to 1/degree, unchanged.
+        node_area = getattr(graph, 'area', None) if self.area_pool else None
         if supergraph is not None:
-            super_pos=supergraph.pos 
-            super_batch=supergraph.batch 
-            super_edge_index=supergraph.edge_index    
+            super_pos=supergraph.pos
+            super_batch=supergraph.batch
+            super_edge_index=supergraph.edge_index
 
        # Message Passing on the full graph.
         for i, layer in enumerate(self.layers):
@@ -179,7 +184,7 @@ class GroupPerceiverEncoder(nn.Module):
                      f" pos: {pos.shape}, "
                      f" edge index: {edge_index.shape}")
 
-            x = layer(x, pos, edge_index)
+            x = layer(x, pos, edge_index, area=node_area)
             if self.verbose:
                 print(f"Layer {i} output shape: {x.shape}")
 
@@ -190,7 +195,7 @@ class GroupPerceiverEncoder(nn.Module):
                 raise ValueError(
                     "use_supernodes=True requires super_pos, super_batch and super_edge_index."
                 )
-            x = self.supernode_conv(x, pos, super_pos, super_edge_index)
+            x = self.supernode_conv(x, pos, super_pos, super_edge_index, area_src=node_area)
             batch_idx = super_batch
             feat_pos = super_pos
 

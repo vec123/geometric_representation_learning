@@ -32,6 +32,7 @@ from src.learning.models.folding_decoder import FoldingDecoder
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
 from src.learning.logger.train_logs import TrainingLogger
+from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
 from config.root import get_project_root
 from src.learning.helpers import load_dataset, build_training_graph, save_graph_vtp
@@ -79,8 +80,13 @@ VAL_SHAPE_DATA_ROOT =  os.path.join(
     Project_ROOT,
     "Dataset", "vtp_samples", "val_Dataset_faceparts_normalized")
 
-OUTPUT_DIR = os.path.join(Project_ROOT, 
+OUTPUT_DIR = os.path.join(Project_ROOT,
                           "training_log_contrastive_vae")
+
+# Headless/HPC toggle: None -> auto (mirror output to a log file when stdout is not a TTY,
+# e.g. under SLURM/nohup); True/False to force. In remote mode stdout+stderr are teed to a
+# timestamped, flushed log under OUTPUT_DIR for easy inspection (tail -f).
+REMOTE = None
 
 
 
@@ -89,6 +95,7 @@ OUTPUT_DIR = os.path.join(Project_ROOT,
 # --------------------------------------------------------------------------- #
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    enable_headless(OUTPUT_DIR, remote=REMOTE, name="equivariant_gnn_train")
     key = torch.Generator(device="cpu")
     key.manual_seed(0)
 
@@ -97,7 +104,7 @@ def main():
                                             parts = parts )
   
     graph, supergraph = build_training_graph(shape_vertices, 
-                                 shape_mask,
+                                shape_mask,
                                 key,
                                 r_max = R_MAX,       
                                 dropout_rate = DROPOUT_RATE, 

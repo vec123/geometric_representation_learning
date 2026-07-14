@@ -19,11 +19,13 @@ class GroupEncoder(nn.Module):
                  supernode_sh_lmax: int = 4,
                  transformer_type: str = "se3",
                  transformer_cfg: dict = None,
+                 area_pool: bool = False,
                  verbose: bool = False):
 
         super().__init__()
         self.latent_dim = latent_dim
         self.readout = readout
+        self.area_pool = area_pool
         self.verbose = verbose
         
         # Define EquiLayers (Assuming stack of EquiLayer modules)
@@ -95,11 +97,15 @@ class GroupEncoder(nn.Module):
         pos = graph.pos
         edge_index = graph.edge_index
         batch_idx = graph.batch
+        # Per-node surface measure for area-weighted aggregation (full-graph nodes). Only
+        # used when area_pool is on and the data carries an 'area' attribute -> otherwise
+        # the convs fall back to 1/degree, unchanged.
+        node_area = getattr(graph, 'area', None) if self.area_pool else None
         if supergraph is not None:
-            super_pos=supergraph.pos 
-            super_batch=supergraph.batch 
-            super_edge_index=supergraph.edge_index    
-                 
+            super_pos=supergraph.pos
+            super_batch=supergraph.batch
+            super_edge_index=supergraph.edge_index
+
         # Message Passing on the full graph.
         for i, layer in enumerate(self.layers):
             if self.verbose:
@@ -108,7 +114,7 @@ class GroupEncoder(nn.Module):
                      f" pos: {pos.shape}, "
                      f" edge index: {edge_index.shape}")
 
-            x = layer(x, pos, edge_index)
+            x = layer(x, pos, edge_index, area=node_area)
             if self.verbose:
                 print(f"Layer {i} output shape: {x.shape}")
 
@@ -118,13 +124,23 @@ class GroupEncoder(nn.Module):
                 raise ValueError(
                     "use_supernodes=True requires super_pos, super_batch and super_edge_index."
                 )
-            feat = self.supernode_conv(x, pos, super_pos, super_edge_index)  # [S, out_irreps.dim]
+            feat = self.supernode_conv(x, pos, super_pos, super_edge_index,
+                                       area_src=node_area)  # [S, out_irreps.dim]
             pool_batch = super_batch
             pool_pos = super_pos
+            pool_area = getattr(supergraph, 'area', None)          # supernode mass, if provided
         else:
             feat = x
             pool_batch = batch_idx
             pool_pos = pos
+            pool_area = getattr(graph, 'area', None)               # per-vertex area, if provided
+        # Area weighting turns sums over the pooled set into surface integrals; area is an
+        # invariant 0e scalar, so it does not affect equivariance. Off unless area_pool and
+        # an 'area' attribute are present -> falls back to the uniform behavior.
+        if not self.area_pool or pool_area is None:
+            pool_area = None
+        elif pool_area.dim() == 1:
+            pool_area = pool_area.reshape(-1, 1)                   # [n_pool, 1]
 
         # Equivariant transformer refinement over the pooled set (supernodes or nodes),
         # on the full irreps BEFORE the invariant scalars are filtered out.
@@ -144,7 +160,12 @@ class GroupEncoder(nn.Module):
         # Computed once and shared by the scalar readout and the vector/pose head. Use
         # with global_add_pool so the softmax is the single normalization (a following
         # global_mean_pool would divide again -> a per-shape latent crushed toward 0).
-        weights = scatter_softmax(self.weight_net(scalars), pool_batch)   # [n_pool, 1]
+        logit = self.weight_net(scalars)                                  # [n_pool, 1]
+        if pool_area is not None:
+            # Area-weighted attention: softmax(logit + log a) = a·e^logit / Σ a·e^logit,
+            # so a denser sampling no longer over-counts (a per-shape scale of a cancels).
+            logit = logit + torch.log(pool_area.clamp_min(1e-12))
+        weights = scatter_softmax(logit, pool_batch)                     # [n_pool, 1]
 
         if self.readout == "attention":
             # Attention-pool: collapse each graph's tokens to one, then project to
@@ -183,8 +204,14 @@ class GroupEncoder(nn.Module):
         v1, v2 = vec_graph[:, 0, :], vec_graph[:, 1, :]
         rot_matrix = self.get_rotation_matrix_from_two_vectors(v1, v2)
 
-        # Translation: center of mass (over the pooled token set)
-        transl = global_mean_pool(pool_pos, pool_batch, size=num_graphs)
+        # Translation: center of mass (over the pooled token set). Area-weighted when
+        # areas are available -> the true surface centroid (a plain mean over-weights
+        # densely sampled regions).
+        if pool_area is not None:
+            denom = global_add_pool(pool_area, pool_batch, size=num_graphs).clamp_min(1e-12)
+            transl = global_add_pool(pool_area * pool_pos, pool_batch, size=num_graphs) / denom
+        else:
+            transl = global_mean_pool(pool_pos, pool_batch, size=num_graphs)
         
         #return (mu, logvar), rot_matrix, vec_graph, transl
         return EncoderOutput( mu=mu, 
