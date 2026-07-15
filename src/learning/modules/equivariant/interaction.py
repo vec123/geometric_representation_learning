@@ -298,7 +298,7 @@ class MonteCarloBipartiteSpatialConvolution(EquivariantSpatialConv):
     of a surface integral via reproducible, vectorized neighborhood sampling.
     """
 
-    def forward(self, x_src, pos_src, pos_dst, edge_index, area_src=None, num_samples=156, seed=None):
+    def forward(self, x_src, pos_src, pos_dst, edge_index, area_src=None, num_samples=30, seed=1):
         num_target, num_source = pos_dst.size(0), x_src.size(0)
         
         if edge_index.size(1) == 0:

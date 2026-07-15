@@ -15,6 +15,7 @@ from src.graphs.graphs import (
     get_bipartite_graph)
 from src.transforms.padding import pad_vertex_list
 import random
+from e3nn import o3
 
 def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle=True, verbose=True, load_fields=False, seed = None):
     """Load face-part shapes and optional point fields; fall back to tests/data so the script always runs."""
@@ -136,7 +137,6 @@ def build_training_graph(vertices, mask,
                          features=None,
                          areas=None,
                          normals=None,
-                         bipartite_voronoi=False,
                          bipartite_seed=None,
                          bipartite_max_neighbors=1024,
                          recompute_area=False,
@@ -160,7 +160,6 @@ def build_training_graph(vertices, mask,
                                    num_samples = n_supernodes,
                                     r_max = r_supergraph,
                                     mode = sampling_mode_supernodes,
-                                    voronoi = bipartite_voronoi,
                                     seed = bipartite_seed,
                                     max_num_neighbors = bipartite_max_neighbors)
     else:
@@ -215,3 +214,143 @@ def save_graph_vtp(graph,
             save_vtp(vtp, save_path)
 
 
+
+
+def verify_encoder_behaviour(
+    encoder, 
+    probe_samples, 
+    build_batch_fn, 
+    device, 
+    gcfg,
+    canonical_samples=None,
+    classify_fn=None
+):
+    """
+    A unified, self-contained utility to test the SO(3) rotational/translational 
+    invariance and resampling stability of a geometric GNN encoder. 
+
+    Args:
+        encoder: The GNN model/encoder instance with an `.encode()` method.
+        probe_samples: A list of tuples representing perturbed/rotated probe samples:
+                       [(pos, scalar_feats, normals, area, y), ...]
+        build_batch_fn: Callable that maps (samples, device, **kwargs) -> (graph, supergraph, labels).
+        device: 'cuda' or 'cpu'.
+        gcfg: dict containing the parameters for graph assembly (passed to build_batch_fn).
+        canonical_samples: Optional list of unrotated, canonical samples (one per class) 
+                           used for resampling stability testing. If None, probe_samples 
+                           will be used instead.
+        classify_fn: Optional callable (e.g., `lambda mu: head(mu)`) to map invariant latents
+                     to logits. If None, attempts to use `encoder.head` if it exists.
+    """
+    encoder.eval()
+    print("\n" + "="*70)
+    print(" RUNNING GEOMETRIC INVARIANCE SANITY CHECK ".center(70, "#"))
+    print("="*70)
+
+    # Automatically resolve classification function if available
+    if classify_fn is None and hasattr(encoder, 'head'):
+        classify_fn = encoder.head
+
+    # 1. Build canonical base batch (g0, sg0)
+    g0, sg0, _ = build_batch_fn(probe_samples, device=device, **gcfg)
+
+    # =========================================================================
+    # [Test A] Fixed Graph Structure Invariance (Manual rotation of features)
+    # =========================================================================
+    R = o3.rand_matrix().to(device)
+    t = torch.randn(3, device=device)
+    
+    g1, sg1 = g0.clone(), sg0.clone() if sg0 is not None else None
+    
+    # Rotate positions and vector features
+    g1.pos = g0.pos @ R.T + t
+    g1.x = g0.x.clone()
+    if hasattr(g0, 'normal') and g0.normal is not None:
+        g1.normal = g0.normal @ R.T
+        
+    if sg1 is not None:
+        sg1.pos = sg0.pos @ R.T + t
+        if hasattr(sg0, 'normal') and sg0.normal is not None:
+            sg1.normal = sg0.normal @ R.T
+
+    with torch.no_grad():
+        mu0 = encoder.encode(g0, sg0, monte_carlo_reg=False)
+        mu1 = encoder.encode(g1, sg1, monte_carlo_reg=False)
+        enc_inv = (mu0 - mu1).abs().max().item()
+        
+    print(f" -> [Test A] Fixed Graph:  max|mu - mu(Rx+t)| = {enc_inv:.2e}")
+
+    # =========================================================================
+    # [Test B] End-to-End Invariance (Rotate raw geometry, then rebuild graph)
+    # =========================================================================
+    rebuilt_samples = []
+    for pos, scalar_feats, normals, area, y in probe_samples:
+        Ri, ti = o3.rand_matrix().to(device), torch.randn(3, device=device)
+        
+        pos_d = pos.to(device)
+        normals_d = normals.to(device) if normals is not None else None
+        
+        pos_rot = pos_d @ Ri.T + ti
+        normals_rot = normals_d @ Ri.T if normals_d is not None else None
+        
+        rebuilt_samples.append((
+            pos_rot.cpu(), 
+            scalar_feats, 
+            normals_rot.cpu() if normals_rot is not None else None, 
+            area, 
+            y
+        ))
+        
+    g2, sg2, _ = build_batch_fn(rebuilt_samples, device=device, **gcfg)
+    
+    with torch.no_grad():
+        mu2 = encoder.encode(g2, sg2, monte_carlo_reg=False)
+        e2e_inv = (mu0 - mu2).abs().max().item()
+        
+        rot_agree = 1.0
+        if classify_fn is not None:
+            preds_orig = classify_fn(mu0).argmax(-1)
+            preds_rot = classify_fn(mu2).argmax(-1)
+            rot_agree = (preds_orig == preds_rot).float().mean().item()
+        
+    print(f" -> [Test B] Rebuilt Graph: max|mu - mu_rot|    = {e2e_inv:.2e}")
+    if classify_fn is not None:
+        print(f"            prediction agreement = {rot_agree*100:.1f}%")
+    print("="*70 + "\n")
+
+    # =========================================================================
+    # [Test C] Resampling Stability (Different dropouts over canonical sources)
+    # =========================================================================
+    stability_sources = canonical_samples if canonical_samples is not None else probe_samples
+    res_key = torch.Generator().manual_seed(7)
+    drifts, res_agree = [], []
+
+    for sample in stability_sources:
+        pos, scalar_feats, normals, area, y = sample
+        
+        # Structure as a single-item batch representation
+        canon = (pos, scalar_feats, normals, area, y)
+        
+        for _ in range(8):
+            ga, sga, _ = build_batch_fn([canon], device=device, dropout=0.3, key=res_key, **gcfg)
+            gb, sgb, _ = build_batch_fn([canon], device=device, dropout=0.6, key=res_key, **gcfg)
+            
+            with torch.no_grad():
+                ma = encoder.encode(ga, sga, monte_carlo_reg=False)
+                mb = encoder.encode(gb, sgb, monte_carlo_reg=False)
+                
+            drifts.append(((ma - mb).norm() / (ma.norm() + 1e-9)).item())
+            
+            if classify_fn is not None:
+                pred_a = classify_fn(ma).argmax().item()
+                pred_b = classify_fn(mb).argmax().item()
+                res_agree.append(int(pred_a == pred_b))
+
+    mean_drift = np.mean(drifts)
+    mean_agreement = np.mean(res_agree) if res_agree else 1.0
+    
+    print(f"[3] Resampling stability: mean relative latent drift = {mean_drift:.3f}")
+    if classify_fn is not None:
+        print(f"    Class agreement = {100*mean_agreement:.1f}%")
+
+    return enc_inv, e2e_inv, rot_agree, drifts, res_agree

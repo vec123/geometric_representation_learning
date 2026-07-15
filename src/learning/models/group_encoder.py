@@ -99,7 +99,7 @@ class GroupEncoder(nn.Module):
 
 
 
-    def forward(self,graph, supergraph):
+    def forward(self,graph, supergraph, monte_carlo_reg = True):
 
         x = graph.x
         pos = graph.pos
@@ -135,8 +135,12 @@ class GroupEncoder(nn.Module):
                 raise ValueError(
                     "use_supernodes=True requires super_pos, super_batch and super_edge_index."
                 )
+            if not monte_carlo_reg:
+                edge_sampling_seed = 1 
+            else:
+                edge_sampling_seed = None
             feat = self.supernode_conv(x, pos, super_pos, super_edge_index,
-                                       area_src=node_area )  # [S, out_irreps.dim]
+                                       area_src=node_area, seed= edge_sampling_seed )  # [S, out_irreps.dim]
             pool_batch = super_batch
             pool_pos = super_pos
             pool_area = getattr(supergraph, 'area', None)          # supernode mass, if provided

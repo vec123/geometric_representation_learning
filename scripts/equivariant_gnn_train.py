@@ -49,7 +49,7 @@ from src.learning.helpers import (
 USE_SUPERNODES = True          # toggle: supernode subset (True) vs full/decimated graph (False)
 DROPOUT_RATE   = 0.9          # uniform node dropout to reduce data-sample size uniformly
 N_SUPERNODES   = 15           # n_s, used when USE_SUPERNODES is True
-DORPOUT_SAMPLING_MODE  = "uniform"         # 'fps' | 'uniform' | 'gaussian'
+DROPOUT_SAMPLING_MODE  = "uniform"         # 'fps' | 'uniform' | 'gaussian'
 SUPERNODE_SAMPLING_MODE  = "uniform"         # 'fps' | 'uniform' | 'gaussian'
 NOISE_STD      = 0.00          #Optional: noise addition
 R_MAX         = 0.25         #radius for graph

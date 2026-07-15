@@ -107,8 +107,7 @@ def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None, return_in
     return torch.cat(selected_nodes_list, dim=0), torch.cat(batch_vec_list, dim=0)
 
 
-def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mode = "fps",
-                      voronoi=False, seed=None, max_num_neighbors=128):
+def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mode = "fps", seed=None, max_num_neighbors=128):
     super_nodes, super_batch = sample_nodes(vertices, mask, num_samples=num_samples, mode=mode)
 
     # 4. Bipartite aggregation graph: each supernode gathers the full-graph nodes within
@@ -116,7 +115,7 @@ def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mod
     #    select the aggregation mode / reproducible neighbour cap (see build_bipartite_graph).
     super_graph = build_bipartite_graph(
             full_graph.pos, full_graph.batch, super_nodes, super_batch, r_max=r_max,
-            max_num_neighbors=max_num_neighbors, voronoi=voronoi, seed=seed
+            max_num_neighbors=max_num_neighbors,  seed=seed
     )
     if hasattr(full_graph, 'area') and full_graph.area is not None:
         src_area = full_graph.area
@@ -192,7 +191,7 @@ def _sample_neighbors_per_super(edge_index, num_super, max_num_neighbors, seed, 
 
 
 def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_max=0.4,
-                          max_num_neighbors=128, voronoi=False, seed=None):
+                          max_num_neighbors=128, seed=None):
     """
     Build the bipartite aggregation graph joining supernodes to full-graph nodes -- the
     supernode message-passing structure (n_s supernodes aggregate a spatial neighbourhood).
@@ -203,11 +202,6 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
         With ``seed=None`` the cap is radius()'s built-in truncation (keeps whatever it finds
         first -- arbitrary order); pass an int ``seed`` to instead keep a REPRODUCIBLE RANDOM
         subset of the supernode's full neighbourhood.
-      * voronoi (``voronoi=True``): each full node is assigned to its SINGLE nearest supernode
-        (a partition -- every node contributes to exactly one supernode), so no cap is needed
-        and each supernode owns ~len(full)/len(super) nodes. ``r_max`` still gates (a node
-        beyond ``r_max`` from every supernode is dropped); ``seed``/``max_num_neighbors`` are
-        unused in this mode.
 
     edge_index convention (radius(x=full, y=super)):
         edge_index[0] -> supernode (target / receiver) index into super_nodes
@@ -225,11 +219,8 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
     assert super_nodes.size(0) == super_batch.size(0), \
         f"Mismatch: super_nodes {super_nodes.size(0)} != super_batch {super_batch.size(0)}"
 
-    if voronoi:
-        # Partition: each full node -> its single nearest supernode (no neighbour cap needed).
-        edge_index = _voronoi_bipartite_edges(full_nodes, full_batch,
-                                              super_nodes, super_batch, r_max)
-    elif seed is not None:
+   
+    if seed is not None:
         # Radius ball, but pick each supernode's <= max_num_neighbors as a SEEDED RANDOM
         # subset: retrieve ALL neighbours first (cap = |full|), then subsample per supernode.
         all_edges = radius(
