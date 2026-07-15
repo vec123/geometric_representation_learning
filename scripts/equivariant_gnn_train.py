@@ -17,6 +17,8 @@ import os
 import glob
 
 import torch
+import random
+import numpy as np
 
 from src.vtk.io import load_vtp, save_vtp
 from src.vtk.create import create_polydata, create_polydata_w_lines
@@ -85,7 +87,7 @@ parts = ["box_to_ellipse_frames", "box_to_pyramid_frames",
          "ellipse_to_pyramid_frames", "ellipse_to_sphere_frames",
          "pyramid_to_box_frames", "pyramid_to_ellipse_frames",
          "pyramid_to_sphere_frames", "sphere_to_box_frames",
-         "sphere_to_ellipse_frames", "sphere_to_ellipse_frames",
+         "sphere_to_ellipse_frames", 
          "sphere_to_pyramid_frames" ]
 
 OUTPUT_DIR = os.path.join(Project_ROOT,
@@ -104,14 +106,20 @@ REMOTE = None
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     enable_headless(OUTPUT_DIR, remote=REMOTE, name="equivariant_gnn_train")
-    key = torch.Generator(device="cpu")
-    key.manual_seed(0)
+    SEED = 0
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)              # seeds CPU + the default CUDA generator
+    torch.cuda.manual_seed_all(SEED)     # all GPUs (redundant with above but explicit)
+    key = torch.Generator(device="cpu")  # you already have this
+    key.manual_seed(SEED)
 
    
     shape_vertices, shape_mask, shape_areas, shape_normals = load_dataset(
         data_path=SHAPE_DATA_ROOT,
         parts=parts,
         load_fields=True,
+        seed = 0
     )
 
     # Hold out a fraction of the SAME loaded set for validation. One shared permutation
@@ -221,7 +229,7 @@ def main():
 
     stepper = TrainingStepper(encoder, decoder,
                                learning_rate=LEARNING_RATE,
-                               kl_weight=0.0000,
+                               kl_weight=0.001,
                                contrastive_weight=CONTRASTIVE_WEIGHT if CONTRASTIVE else 0.0,
                                contrastive_var_weight=CONTRASTIVE_VAR_WEIGHT)
     logger = TrainingLogger(log_dir = OUTPUT_DIR)
@@ -229,6 +237,22 @@ def main():
                                    dataloader=loader, val_loader=val_loader)
 
     print(f"----------training on device: {stepper.device}----------")
+    if stepper.device != "cuda":
+        # Surface WHY the GPU gate failed instead of dying on a bare AssertionError:
+        # a CPU-only torch build and a GPU node with no visible device look identical
+        # otherwise. (Under `python -O` the assert below is stripped, so this print is
+        # the only signal the run landed on CPU.)
+        print(
+            "[gpu-gate] CUDA required but not selected. "
+            f"torch={torch.__version__}, cuda_available={torch.cuda.is_available()}, "
+            f"device_count={torch.cuda.device_count()}, "
+            f"torch_cuda_build={torch.version.cuda}, "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')!r}"
+        )
+    assert stepper.device == "cuda", (
+        f"expected to train on CUDA but resolved to {stepper.device}; "
+        "see the [gpu-gate] diagnostics above."
+    )
     trainer.run(num_steps=NUM_STEPS, log_every=LOG_EVERY,
                  save_every=SAVE_EVERY, val_every=VAL_EVERY)
     print(f"done. outputs in {OUTPUT_DIR}")

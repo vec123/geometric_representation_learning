@@ -4,6 +4,9 @@ import torch.nn.functional as F
 from e3nn import o3
 from torch_geometric.nn import MessagePassing
 from torch_scatter import scatter
+import torch
+from torch_geometric.utils import degree
+from typing import Tuple  
 
 from src.learning.modules.equivariant.irreps_utils import (
     scalar_features,
@@ -245,3 +248,92 @@ class BipartiteSpatialConvolution(EquivariantSpatialConv):
             print("out.shape: ", out.shape)
             print("--------------Finished --------------")
         return out * inv
+
+
+def _sample_neighbors(
+    edge_index: torch.Tensor,
+    area_src: torch.Tensor,
+    num_target: int,
+    num_samples: int,
+    generator: torch.Generator = None
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Performs vectorized weighted random sampling (Efraimidis-Spirakis)
+    without replacement per target node.
+    """
+    device = edge_index.device
+    targets, sources = edge_index[0], edge_index[1]
+    E = edge_index.size(1)
+
+    # 1. Calculate target node degrees (K_i)
+    deg_target = degree(targets, num_nodes=num_target, dtype=area_src.dtype)
+
+    # 2. Compute Efraimidis-Spirakis keys: u^(1/a_j)
+    edge_areas = area_src[sources].clamp_min(1e-12)
+    u = torch.rand(E, generator=generator, device=device)
+    keys = u.pow(1.0 / edge_areas)
+
+    # 3. Sort keys globally (descending), then group stably by target ID
+    order = keys.argsort(descending=True)
+    targets_sorted = targets[order]
+    group_idx = torch.argsort(targets_sorted, stable=True)
+    
+    targets_grouped = targets_sorted[group_idx]
+    sampled_edge_ids = order[group_idx]
+
+    # 4. Filter top-M edges per target using grouped offsets
+    counts = torch.bincount(targets_grouped, minlength=num_target)
+    offsets = counts.cumsum(0) - counts
+    rank = torch.arange(E, device=device) - offsets[targets_grouped]
+
+    max_rank = torch.clamp(deg_target[targets_grouped], max=num_samples)
+    keep = rank < max_rank
+
+    return sampled_edge_ids[keep], deg_target
+
+
+class MonteCarloBipartiteSpatialConvolution(EquivariantSpatialConv):
+    """
+    Bipartite spatial convolution using a Monte Carlo approximation 
+    of a surface integral via reproducible, vectorized neighborhood sampling.
+    """
+
+    def forward(self, x_src, pos_src, pos_dst, edge_index, area_src=None, num_samples=156, seed=None):
+        num_target, num_source = pos_dst.size(0), x_src.size(0)
+        
+        if edge_index.size(1) == 0:
+            out_dim = self.out_irreps.dim if hasattr(self, 'out_irreps') else x_src.size(-1)
+            return x_src.new_zeros(num_target, out_dim)
+
+        # Initialize local generator for reproducible random state
+        gen = None
+        if seed is not None:
+            gen = torch.Generator(device=edge_index.device).manual_seed(seed)
+
+        # Extract node areas and run our vectorized sampler
+        area_node = self._node_area(area_src, num_source, x_src).view(-1)
+        sampled_edges, deg_target = _sample_neighbors(
+            edge_index, area_node, num_target, num_samples, gen
+        )
+
+        sub_edge_index = edge_index[:, sampled_edges]
+
+        # Flip to PyG source-to-target layout: [source (full), target (super)]
+        sub_edge_index = torch.stack([sub_edge_index[1], sub_edge_index[0]], dim=0)
+        col = sub_edge_index[1]
+
+        # Message Passing
+        x_dst = x_src.new_zeros(num_target, self.in_irreps.dim)
+        out = self.propagate(
+            sub_edge_index, 
+            x=(x_src, x_dst), 
+            pos=(pos_src, pos_dst),
+            area=(area_node.unsqueeze(-1), x_src.new_ones(num_target, 1)), 
+            size=(num_source, num_target),
+        )
+
+        # Scale output by (K_total / M_sampled) for unbiased importance sampling
+        m_sampled = torch.bincount(col, minlength=num_target).to(x_src.dtype).clamp_min(1.0)
+        scale = (deg_target / m_sampled).unsqueeze(-1)
+        
+        return out * scale

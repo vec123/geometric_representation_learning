@@ -1,14 +1,15 @@
-"""Sanity test: classify smooth surfaces from the encoder's INVARIANT scalar latent.
+"""Sanity test: classify primitive shapes from the encoder's INVARIANT scalar latent.
 
-Surfaces are continuous 2-manifolds sampled at discrete vertices. Each vertex carries:
+Shapes are the point clouds in Dataset/Primitives/*.vtp (box, ellipse, pyramid, sphere),
+each a surface sampled at discrete vertices. Each vertex carries:
   * position          (fed geometrically, not as a feature)
   * unit normal        -> a ``1o`` equivariant input feature
   * relative area       -> a ``0e`` invariant input feature (local sampling density)
 
 The encoder runs its equivariant GNN on the full vertex graph, then AGGREGATES to a small
-set of supernodes (sampled + bipartite conv, via the shared src.graphs.graphs builders that
+set of supernodes (via the shared src.learning.helpers.build_training_graph that
 equivariant_gnn_train also uses), and the SE(3) transformer + scalar readout act on
-those supernodes -- so the O(N^2) attention is over ~16 supernodes, not ~120 vertices
+those supernodes -- so the O(N^2) attention is over ~16 supernodes, not the ~512 vertices
 (keeps it comfortably inside 8 GB VRAM). A small MLP head is attached to the encoder's
 ``mu`` (the SE(3)-invariant scalar latent) and trained with cross-entropy.
 
@@ -44,161 +45,120 @@ if ROOT not in sys.path:
 
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.logger.headless import enable_headless
-from src.graphs.graphs import build_radius_graph, sample_nodes, build_bipartite_graph
-
+from src.learning.helpers import build_training_graph
+from src.vtk.io import load_vtp
+from src.vtk.extract import extract_vtp_points_cells, extract_vtp_point_fields
+from src.learning.logger.train_logs import TrainingLogger
 
 # --------------------------------------------------------------------------- #
-# Parametric surfaces  S(u, v) -> R^3  (each returns [nu, nv, 3])
+# Primitive shapes:  Each file is a 512-point cloud carrying two point fields:
+#   * ``normal`` [N,3] -- unit, outward-oriented     -> a ``1o`` equivariant input feature
+#   * ``area``   [N]   -- per-vertex surface measure -> a ``0e`` invariant input feature
+# There is ONE canonical cloud per class; training variety comes from random rotations/
+# translations (make_sample) and vertex dropout/resampling (build_batch) -- 
+# exactly the augmentations
+# the invariance [2] and resampling-stability [3] probes are built to test.
 # --------------------------------------------------------------------------- #
-def _sphere(U, V, p):
-    r = p['r']
-    return np.stack([r * np.sin(U) * np.cos(V), r * np.sin(U) * np.sin(V), r * np.cos(U)], -1)
 
-def _torus(U, V, p):
-    R, r = p['R'], p['r']
-    return np.stack([(R + r * np.cos(V)) * np.cos(U),
-                     (R + r * np.cos(V)) * np.sin(U), r * np.sin(V)], -1)
-
-def _cylinder(U, V, p):
-    r, h = p['r'], p['h']
-    return np.stack([r * np.cos(U), r * np.sin(U), h * V], -1)
-
-def _saddle(U, V, p):
-    a = p['a']
-    return np.stack([U, V, a * (U ** 2 - V ** 2)], -1)
-
-SURFACES = {
-    'sphere':   (_sphere,   (0.15, math.pi - 0.15), (0.0, 2 * math.pi)),
-    'torus':    (_torus,    (0.0, 2 * math.pi),     (0.0, 2 * math.pi)),
-    'cylinder': (_cylinder, (0.0, 2 * math.pi),     (-1.0, 1.0)),
-    'saddle':   (_saddle,   (-1.0, 1.0),            (-1.0, 1.0)),
+PRIMITIVES_DIR = os.path.join(ROOT, 'Dataset', 'Primitives')
+PRIMITIVE_FILES = {
+    'box':     'box.vtp',
+    'ellipse': 'ellipse.vtp',
+    'pyramid': 'pyramid.vtp',
+    'sphere':  'sphere.vtp',
 }
-CLASSES = list(SURFACES)
+CLASSES = list(PRIMITIVE_FILES)
+
+_PRIM_CACHE = {}
+
+# --------------------------------------------------------------------------- #
+R_MAX          = 0.22    # full-graph radius ball 
+R_SUPERGRAPH   = 0.5    # bipartite radius
+N_SUPERNODES = 10
+SUPERNODE_MODE = 'fps'   # supernode sampling, as in equivariant_gnn_train's sample_nodes:
+                         # 'fps' -> deterministic, rotation/translation-invariant selection
 
 
-def _random_params(name, rng):
-    if name == 'sphere':   return {'r': rng.uniform(0.8, 1.4)}
-    if name == 'torus':    return {'R': rng.uniform(1.0, 1.5), 'r': rng.uniform(0.3, 0.5)}
-    if name == 'cylinder': return {'r': rng.uniform(0.5, 0.9), 'h': rng.uniform(0.8, 1.4)}
-    if name == 'saddle':   return {'a': rng.uniform(0.6, 1.2)}
-    raise KeyError(name)
+def _load_primitive(name):
+    """Load a primitive -> (pos [N,3], unit normal [N,3], rel_area [N,1]) as torch.float32.
+
+    The .vtp already carries unit outward normals and per-vertex ``area`` as point fields
+    (Dataset/add_point_features.py), so nothing geometric is recomputed here. ``rel_area``
+    is the area field divided by its mean -- a scale-free local sampling density (O(1)) that
+    matches the 0e input-feature scale; the encoder's area pooling is itself scale-invariant,
+    so build_batch reuses the same normalised area for the supernode Voronoi mass. Cached:
+    each file is read from disk once."""
+    if name not in _PRIM_CACHE:
+        path = os.path.join(PRIMITIVES_DIR, PRIMITIVE_FILES[name])
+        polydata = load_vtp(path)
+        points, _ = extract_vtp_points_cells(polydata)
+        fields = extract_vtp_point_fields(polydata, ['area', 'normal'])
+        area, normal = fields['area'], fields['normal']
+        if area is None or normal is None:
+            raise ValueError(f"{path} is missing 'area'/'normal' point fields -- run "
+                             f"Dataset/add_point_features.py on the primitives first.")
+        pos = torch.tensor(np.asarray(points), dtype=torch.float32)
+        normal = torch.tensor(np.asarray(normal), dtype=torch.float32)
+        area = torch.tensor(np.asarray(area), dtype=torch.float32)
+        rel_area = (area / area.mean()).unsqueeze(-1)
+        _PRIM_CACHE[name] = (pos, normal, rel_area)
+    pos, normal, rel_area = _PRIM_CACHE[name]
+    return pos.clone(), normal.clone(), rel_area.clone()
 
 
-def _geometry(name, nu, nv, p):
-    """-> pos [N,3], unit normal [N,3], relative area [N,1] (all torch.float32)."""
-    fn, (u0, u1), (v0, v1) = SURFACES[name]
-    U, V = np.meshgrid(np.linspace(u0, u1, nu), np.linspace(v0, v1, nv), indexing='ij')
-    P = fn(U, V, p)                                            # [nu, nv, 3]
-    du, dv = np.gradient(P, axis=0), np.gradient(P, axis=1)    # tangents (finite diff)
-    n = np.cross(du, dv)
-    area = np.linalg.norm(n, axis=-1) + 1e-12                 # |S_u x S_v| ~ area element
-    n = n / area[..., None]
-    P, n, area = P.reshape(-1, 3), n.reshape(-1, 3), area.reshape(-1)
-    c = P.mean(0, keepdims=True)                              # orient normals outward
-    s = np.sign((n * (P - c)).sum(-1, keepdims=True)); s[s == 0] = 1.0
-    n = n * s
-    return (torch.tensor(P, dtype=torch.float32),
-            torch.tensor(n, dtype=torch.float32),
-            torch.tensor(area / area.mean(), dtype=torch.float32).unsqueeze(-1))
-
-
-def make_sample(name, nu, nv, rng, rotate=True):
+def make_sample(name, rotate=True):
     """(pos [N,3], x [N,5], area [N], y int).  x = [1, rel_area, normal] -> '2x0e + 1x1o'.
     ``area`` is the per-vertex surface measure (rotation/translation invariant), used for
-    area-weighted pooling. (For a real .vtp point cloud, replace _geometry's analytic area
-    with mesh areas from src.preprocessing.SurfaceTriangulator.)"""
-    pos, normal, rel_area = _geometry(name, nu, nv, _random_params(name, rng))
+    area-weighted pooling. The canonical geometry is fixed per class (one .vtp); ``rotate``
+    only draws the random rotation+translation that gives each sample a different pose."""
+    pos, normal, rel_area = _load_primitive(name)
     if rotate:
         R, t = o3.rand_matrix(), torch.randn(3)
         pos = pos @ R.T + t
         normal = normal @ R.T                                 # normals are 1o -> rotate too
     x = torch.cat([torch.ones(pos.shape[0], 1), rel_area, normal], dim=-1)
-    return pos, x, rel_area.squeeze(-1), CLASSES.index(name)
-
-
-# --------------------------------------------------------------------------- #
-# Graph construction -- reuses the shared src.graphs.graphs primitives that
-# equivariant_gnn_train also builds its graphs with:
-#   * build_radius_graph    -> full vertex graph (radius ball, not kNN)
-#   * sample_nodes          -> supernode subset (fps | uniform | gaussian)
-#   * build_bipartite_graph -> supernode<-vertex aggregation edges (radius)
-#
-# Canonical-resolution design (as in equivariant_gnn_train's build_super_graph +
-# ResamplingGraphLoader): each ``samples`` entry is the surface at a FIXED, high
-# "canonical" resolution. Supernodes are FPS-sampled on that canonical cloud (so the
-# supernode set is resolution-INDEPENDENT), and their Voronoi mass is measured on it
-# too. The full graph fed to the GNN is a DROPOUT of the canonical vertices -- i.e. a
-# "resampling" is just a dropout of the highest resolution -- and the bipartite edges
-# connect the fixed canonical supernodes to whichever current vertices survive. This
-# is what keeps [3] stable: two resamplings share the exact same supernodes, so only
-# the (area-weighted) neighbourhood each supernode aggregates changes.
-#
-# Per-vertex features (x = const, area, normal) and the area attributes are surface-
-# specific and assembled here -- the shared builders carry positions/edges/batch only.
-# --------------------------------------------------------------------------- #
-R_MAX          = 0.7     # full-graph radius ball (replaces the old kNN k_full)
-R_SUPERGRAPH   = 1.2     # bipartite radius: neighbourhood each supernode aggregates over
-SUPERNODE_MODE = 'fps'   # supernode sampling, as in equivariant_gnn_train's sample_nodes:
-                         # 'fps' -> deterministic, rotation/translation-invariant selection
-                         # (keeps the [2b]/[3] invariance checks meaningful); 'uniform' or
-                         # 'gaussian' match the other modes but are random.
+    scalar_feats = torch.ones(pos.shape[0], 1)
+    return pos, scalar_feats, normal, rel_area.squeeze(-1), CLASSES.index(name)
 
 
 def build_batch(samples, S=16, r_max=R_MAX, r_super=R_SUPERGRAPH,
-                super_mode=SUPERNODE_MODE, dropout=0.0, device='cpu', key=None):
-    """Assemble a list of CANONICAL (high-res) (pos, x, area, y) into (graph, supergraph, y).
-
-    graph      : full vertex graph over a DROPOUT of the canonical vertices (radius ball,
-                 build_radius_graph) with the surviving x, pos, batch and per-vertex ``area``.
-    supergraph : supernodes FPS-sampled on the CANONICAL cloud (fixed across dropouts) +
-                 bipartite radius edges to the current vertices (build_bipartite_graph;
-                 row0=super target, row1=full source), plus per-supernode ``area`` (Voronoi
-                 mass measured on the canonical cloud). The ``area`` attributes feed
-                 GroupEncoder's area-weighted pooling (area_pool=True).
+                super_mode=SUPERNODE_MODE, dropout=0.0, device='cpu', key=None,
+                bipartite_mode='radius', bipartite_seed=0, recompute_area=True):
+    """Assemble a list of canonical (pos, x, area, y) primitives into (graph, supergraph, y)
+    via the shared build_training_graph (see the module comment above for the design).
 
     ``dropout`` is the fraction of canonical vertices dropped to form the current graph;
-    a "resampling" is two draws with (possibly) different dropout. ``key`` (a
-    torch.Generator) makes the dropout reproducible.
-    """
-    xs, ps, av, fb, ys = ([] for _ in range(5))
-    sp, sb, sa = [], [], []
-    for b, (pos, x, area, y) in enumerate(samples):
-        Nc = pos.shape[0]                                     # canonical vertex count
+    a "resampling" is two draws with (possibly) different dropout. ``key`` (a torch.Generator)
+    makes the dropout reproducible. Every primitive has the same vertex count, so the shapes
+    stack directly into the padded [B, N, *] tensors build_training_graph expects (all-true
+    mask -> no real padding).
 
-        # --- supernodes on the CANONICAL cloud (fixed, resolution-independent) ---
-        spos, _ = sample_nodes(pos.unsqueeze(0), torch.ones(1, Nc, dtype=torch.bool),
-                               num_samples=S, mode=super_mode, key=key)
-        s = spos.shape[0]
-        sp.append(spos); sb.append(torch.full((s,), b, dtype=torch.long))
-        # supernode mass: nearest-supernode Voronoi partition of the canonical surface
-        # (measured on the full cloud -> identical for every dropout of it).
-        nearest = torch.cdist(spos, pos).argmin(dim=0)        # [Nc] nearest supernode
-        A_s = torch.zeros(s); A_s.index_add_(0, nearest, area)
-        sa.append(A_s)
+    ``bipartite_mode`` selects supernode aggregation: 'radius' (each supernode gathers its
+    r_super ball, capping the denser ones at 128 via a SEEDED random subset -> reproducible
+    'keep 128 at random') or 'voronoi' (each vertex -> its single nearest supernode, a
+    partition with no cap). ``bipartite_seed`` seeds the radius-mode neighbour subsampling."""
+    verts = torch.stack([s[0] for s in samples])              # [B, N, 3] positions
+    scalar_feats = torch.stack([s[1] for s in samples])   # only scalar invariants
+    normals = torch.stack([s[2] for s in samples])        # vector features
+    areas = torch.stack([s[3] for s in samples])  
 
-        # --- current graph = dropout of the canonical vertices ---
-        if dropout > 0:
-            keep = torch.rand(Nc, generator=key) > dropout
-            if int(keep.sum()) < 3:                           # never empty a shape
-                keep = torch.ones(Nc, dtype=torch.bool)
-        else:
-            keep = torch.ones(Nc, dtype=torch.bool)
-        cpos, cx, carea = pos[keep], x[keep], area[keep]
-        N = cpos.shape[0]
-        xs.append(cx); ps.append(cpos); av.append(carea); ys.append(y)
-        fb.append(torch.full((N,), b, dtype=torch.long))
+    B, N = verts.shape[:2]
+    mask = torch.ones(B, N, dtype=torch.bool)
+    y = torch.tensor([s[4] for s in samples], dtype=torch.long)
 
-    full_pos, full_batch = torch.cat(ps), torch.cat(fb)
-    # full graph: shared radius-graph builder (batch-aware -> no cross-shape edges).
-    graph = build_radius_graph(full_pos, full_batch, r_max=r_max)
-    graph.x, graph.area = torch.cat(xs), torch.cat(av)
-
-    # supernode aggregation: shared radius bipartite builder (row0=super, row1=full).
-    supergraph = build_bipartite_graph(full_pos, full_batch,
-                                       torch.cat(sp), torch.cat(sb), r_max=r_super)
-    supergraph.area = torch.cat(sa)
-
-    y = torch.tensor(ys, dtype=torch.long)
+    voronoi = (bipartite_mode == 'voronoi')
+    graph, supergraph = build_training_graph(
+        verts, mask, key,
+        r_max=r_max, dropout_rate=dropout,
+        n_supernodes=S, r_supergraph=r_super, use_supernodes=True,
+        sampling_mode_graph='uniform', sampling_mode_supernodes=super_mode,
+        features=scalar_feats,
+        areas=areas, 
+        normals=normals,
+        bipartite_voronoi=voronoi,
+        bipartite_seed=(None if voronoi else bipartite_seed),
+        bipartite_max_neighbors=1024,
+        recompute_area = recompute_area)
     return graph.to(device), supergraph.to(device), y.to(device)
 
 
@@ -210,7 +170,7 @@ class SurfaceClassifier(nn.Module):
         super().__init__()
         # Slim (fits ~8 GB): narrow irreps, sh_lmax=1, transformer over the SUPERNODES.
         cfg = {
-            'input_irreps': '2x0e + 1x1o',
+            'input_irreps': '1x0e + 1x1o',
             'intermediate_irreps': '16x0e + 8x1o',
             'output_irreps': f'{latent_dim}x0e + 2x1o',
         }
@@ -232,8 +192,8 @@ class SurfaceClassifier(nn.Module):
 # --------------------------------------------------------------------------- #
 # Train / evaluate
 # --------------------------------------------------------------------------- #
-def build_split(n_per_class, nu, nv, rng, rotate=True):
-    data = [make_sample(name, nu, nv, rng, rotate=rotate)
+def build_split(n_per_class, rng, rotate=True):
+    data = [make_sample(name, rotate=rotate)
             for name in CLASSES for _ in range(n_per_class)]
     rng.shuffle(data)
     return data
@@ -245,7 +205,10 @@ def accuracy(model, data, device, bs=16, gcfg=None):
     gcfg = gcfg or {}
     correct = total = 0
     for i in range(0, len(data), bs):
-        g, sg, y = build_batch(data[i:i + bs], device=device, **gcfg)
+        g, sg, y = build_batch(data[i:i + bs], 
+                               device=device,
+                                recompute_area=True,
+                                **gcfg)
         correct += (model(g, sg).argmax(-1) == y).sum().item(); total += y.numel()
     return correct / total
 
@@ -259,7 +222,7 @@ def main():
     ap.add_argument("--local", action="store_true",
                     help="Force interactive mode (disable the not-a-TTY auto-remote).")
     ap.add_argument("--log-dir", default=os.path.join(ROOT, "results"))
-    ap.add_argument("--epochs", type=int, default=25)
+    ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default=None, help="cuda | cpu (default: auto)")
     ap.add_argument("--area-pool", dest="area_pool", action="store_true", default=True,
@@ -270,7 +233,7 @@ def main():
     # Graph-construction knobs (the main levers on resampling stability [3]): more
     # supernodes + a wider bipartite radius make the area-weighted pool a lower-variance
     # estimate of the surface integral, so which supernodes FPS happens to pick matters less.
-    ap.add_argument("--supernodes", type=int, default=16, help="n supernodes S (sample_nodes).")
+    ap.add_argument("--supernodes", type=int, default=N_SUPERNODES, help="n supernodes S (sample_nodes).")
     ap.add_argument("--r-max", type=float, default=R_MAX, help="full-graph radius ball.")
     ap.add_argument("--r-super", type=float, default=R_SUPERGRAPH,
                     help="bipartite radius: neighbourhood each supernode aggregates over.")
@@ -283,6 +246,14 @@ def main():
                     help="two-view resampling-consistency loss (as in equivariant_gnn_train's "
                          "CONTRASTIVE path): >0 draws a 2nd dropout of the same canonical cloud "
                          "each step and pulls the two latents together -> directly trains down [3].")
+    ap.add_argument("--bipartite-mode", default="radius", choices=["radius", "voronoi"],
+                    help="supernode aggregation (build_bipartite_graph): 'radius' -> each "
+                         "supernode gathers its r_super ball, capping dense ones at 128 via a "
+                         "SEEDED random subset; 'voronoi' -> each vertex to its single nearest "
+                         "supernode (a partition, no cap).")
+    ap.add_argument("--bipartite-seed", type=int, default=0,
+                    help="seed for the radius-mode 128-neighbour random subsampling (reproducible "
+                         "'keep 128 at random'); unused in voronoi mode.")
     args = ap.parse_args()
 
     # Toggle: --remote / --local, else auto (headless when stdout is not a TTY).
@@ -293,30 +264,41 @@ def main():
     rng = np.random.default_rng(args.seed)
     key = torch.Generator().manual_seed(args.seed)            # reproducible dropout
     device = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
-    NU, NV, S, BS = 18, 15, args.supernodes, 16               # ~270 CANONICAL verts, S supernodes
+    S, BS = args.supernodes, 16
+    NVERT = _load_primitive(CLASSES[0])[0].shape[0]           # canonical verts per shape (512)
 
     # Shared graph-construction config, threaded into every build_batch call so train,
     # eval and the invariance probes all build supernodes the same way.
-    gcfg = dict(S=S, r_max=args.r_max, r_super=args.r_super, super_mode=args.super_mode)
+    gcfg = dict(S=S, r_max=args.r_max, r_super=args.r_super, super_mode=args.super_mode,
+                bipartite_mode=args.bipartite_mode, bipartite_seed=args.bipartite_seed)
 
     print(f"mode={'REMOTE/headless' if is_remote else 'local'}  device={device}  "
-          f"classes={CLASSES}  canon_verts~{NU*NV}  supernodes={S}  epochs={args.epochs}  seed={args.seed}  "
+          f"classes={CLASSES}  canon_verts~{NVERT}  supernodes={S}  epochs={args.epochs}  seed={args.seed}  "
           f"area_pool={args.area_pool}  r_max={args.r_max}  r_super={args.r_super}  super_mode={args.super_mode}  "
-          f"dropout={args.dropout}")
+          f"dropout={args.dropout}  bipartite={args.bipartite_mode}")
 
-    train = build_split(50, NU, NV, rng, rotate=True)
-    test  = build_split(15, NU, NV, rng, rotate=True)
+    train = build_split(50, rng, rotate=True)
+    test  = build_split(15, rng, rotate=True)
 
     model = SurfaceClassifier(num_classes=len(CLASSES), latent_dim=12,
                               area_pool=args.area_pool).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-5)
     lossfn = nn.CrossEntropyLoss()
 
+    logger = TrainingLogger(log_dir="surface_classification")
+
     for ep in range(args.epochs):
         model.train(); rng.shuffle(train); tot = 0.0
         for i in range(0, len(train), BS):
             batch = train[i:i + BS]
             g, sg, y = build_batch(batch, device=device, dropout=args.dropout, key=key, **gcfg)
+
+            if ep %10 == 0  and i==0:
+                logger.visualize_batch( (g,sg, None,None), 
+                                    None, 
+                                    step=ep, 
+                                    subdir = "vtk", max_num= 4)
+            
             mu_a = model.encode(g, sg)
             loss = lossfn(model.head(mu_a), y)
             # Two-view resampling-consistency: a 2nd dropout of the SAME canonical clouds
@@ -326,6 +308,7 @@ def main():
                 mu_b = model.encode(gb, sgb)
                 loss = loss + lossfn(model.head(mu_b), y)
                 loss = loss + args.consistency_weight * ((mu_a - mu_b) ** 2).mean()
+
             opt.zero_grad(); loss.backward(); opt.step()
             tot += loss.item() * y.numel()
         msg = f"epoch {ep:3d}/{args.epochs}  loss {tot/len(train):.4f}"
@@ -342,14 +325,15 @@ def main():
     #   [2b] Is the END-TO-END pipeline invariant? Rebuild the graph from the transformed
     #        cloud -> exposes graph-construction sensitivity (FPS supernode tie-breaking on
     #        symmetric shapes), which perturbs the latent but not, in practice, the class.
-    inv_rng = np.random.default_rng(123)
-    probe = [make_sample(name, NU, NV, inv_rng, rotate=False) for name in CLASSES for _ in range(10)]
+    probe = [make_sample(name, rotate=False) for name in CLASSES for _ in range(10)]
     g0, sg0, _ = build_batch(probe, device=device, **gcfg)
 
     R = o3.rand_matrix().to(device); t = torch.randn(3, device=device)
     g1, sg1 = g0.clone(), sg0.clone()
     g1.pos = g0.pos @ R.T + t
-    g1.x = g0.x.clone(); g1.x[:, 2:5] = g0.x[:, 2:5] @ R.T     # rotate the normal channels
+    g1.x = g0.x.clone()
+    if hasattr(g0, 'normal') and g0.normal is not None:
+        g1.normal = g0.normal @ R.T
     sg1.pos = sg0.pos @ R.T + t
     with torch.no_grad():
         mu0 = model.encode(g0, sg0)
@@ -357,10 +341,10 @@ def main():
     print(f"[2a] encoder invariance (fixed graph): max|mu - mu(Rx+t)| = {enc_inv:.2e}")
 
     rebuilt = []
-    for pos, x, area, y in probe:
+    for pos, scalar_feats, normals, area, y in probe:
         Ri, ti = o3.rand_matrix(), torch.randn(3)
-        x2 = x.clone(); x2[:, 2:5] = x[:, 2:5] @ Ri.T
-        rebuilt.append((pos @ Ri.T + ti, x2, area, y))
+        normals2 = normals.clone() @ Ri.T
+        rebuilt.append((pos @ Ri.T + ti, scalar_feats, normals2, area, y))
     g2, sg2, _ = build_batch(rebuilt, device=device, **gcfg)
     with torch.no_grad():
         mu2 = model.encode(g2, sg2)
@@ -370,20 +354,19 @@ def main():
              f"| prediction agreement = {rot_agree*100:.1f}%")
 
     # [3] Resampling stability, in the canonical-dropout model: ONE canonical cloud per
-    # surface, two DIFFERENT dropouts of it. Supernodes are FPS-sampled on the shared
+    # primitive, two DIFFERENT dropouts of it. Supernodes are FPS-sampled on the shared
     # canonical cloud, so both views get the IDENTICAL supernode set -- only the current
     # (dropped) vertices each supernode aggregates differ. This is the design under test:
-    # drift should now come only from the area-weighted neighbourhood, not from a moving
-    # supernode set (which was the dominant source before).
-    res_rng = np.random.default_rng(7)
+    # drift should come only from the area-weighted neighbourhood, not from a moving
+    # supernode set (which was the dominant source before). Geometry is fixed per class
+    # (one .vtp), so the 8 repeats just average over the random dropout realisations.
     res_key = torch.Generator().manual_seed(7)
     drifts, res_agree = [], []
     for name in CLASSES:
+        pos, nrm, rel_area = _load_primitive(name)                     # canonical cloud (fixed per class)
+        scalar_feats = torch.ones(pos.shape[0], 1)
+        canon = (pos, scalar_feats , nrm,  rel_area.squeeze(-1), CLASSES.index(name))
         for _ in range(8):
-            p = _random_params(name, res_rng)
-            pos, nrm, ar = _geometry(name, NU, NV, p)              # canonical high-res cloud
-            x = torch.cat([torch.ones(pos.shape[0], 1), ar, nrm], -1)
-            canon = (pos, x, ar.squeeze(-1), CLASSES.index(name))
             ga, sga, _ = build_batch([canon], device=device, dropout=0.3, key=res_key, **gcfg)
             gb, sgb, _ = build_batch([canon], device=device, dropout=0.6, key=res_key, **gcfg)
             with torch.no_grad():
@@ -399,6 +382,7 @@ def main():
         "area_pool": args.area_pool,
         "supernodes": S, "r_max": args.r_max, "r_super": args.r_super,
         "super_mode": args.super_mode, "dropout": args.dropout,
+        "bipartite_mode": args.bipartite_mode, "bipartite_seed": args.bipartite_seed,
         "test_accuracy": acc,
         "encoder_invariance_max_mu_diff": enc_inv,
         "end_to_end_invariance_max_mu_diff": e2e_inv,

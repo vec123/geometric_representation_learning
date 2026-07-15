@@ -1,5 +1,6 @@
 # from asyncio import graph
 
+import math
 import torch
 import torch_cluster
 from torch_cluster import radius
@@ -7,6 +8,20 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.nn import radius
 import numpy as np
 from torch_geometric.nn import radius_graph
+from torch_scatter import scatter
+
+
+def estimate_vertex_areas(pos, batch, k=8):
+    """Per-vertex surface measure a_i from the CURRENT cloud (no mesh/canonical needed):
+    a_i = pi * r_k^2 / k, r_k = distance to the k-th nearest neighbour -- a kNN density
+    estimate (a_i ~ inverse local sampling density). So Sum a_i ~ surface area and
+    Sum a_i f(x_i) ~ integral_S f dA at ANY resolution. O(N k), batch-aware."""
+    N = pos.size(0)
+    k = min(k, N - 1)
+    row, col = torch_cluster.knn(pos, pos, k + 1, batch, batch)   # k+1 = self + k neighbours
+    d = (pos[row] - pos[col]).norm(dim=-1)
+    rk = scatter(d, row, dim=0, dim_size=N, reduce='max')         # farthest of k+1 = k-th nbr
+    return math.pi * rk.pow(2) / k
 
 
 def apply_noise_and_masking(vertices, masks=None, noise_std=0.0, dropout_rate=0.0, key=None):
@@ -92,18 +107,25 @@ def sample_nodes(vertices, mask, num_samples=50, mode='fps', key=None, return_in
     return torch.cat(selected_nodes_list, dim=0), torch.cat(batch_vec_list, dim=0)
 
 
-def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mode = "fps"):
+def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mode = "fps",
+                      voronoi=False, seed=None, max_num_neighbors=128):
     super_nodes, super_batch = sample_nodes(vertices, mask, num_samples=num_samples, mode=mode)
 
     # 4. Bipartite aggregation graph: each supernode gathers the full-graph nodes within
-    #    r_max (the neighbourhood a supernode aggregates through the GNN).
+    #    r_max (the neighbourhood a supernode aggregates through the GNN). ``voronoi``/``seed``
+    #    select the aggregation mode / reproducible neighbour cap (see build_bipartite_graph).
     super_graph = build_bipartite_graph(
-            full_graph.pos, full_graph.batch, super_nodes, super_batch, r_max=r_max
+            full_graph.pos, full_graph.batch, super_nodes, super_batch, r_max=r_max,
+            max_num_neighbors=max_num_neighbors, voronoi=voronoi, seed=seed
     )
     if hasattr(full_graph, 'area') and full_graph.area is not None:
         src_area = full_graph.area
+        tgt, src = super_graph.edge_index                    # row0=super, row1=full
+
+        deg = torch.bincount(src, minlength=src_area.size(0)).clamp_min(1)
         sa = torch.zeros(super_graph.num_nodes, dtype=src_area.dtype, device=src_area.device)
-        sa.index_add_(0, super_graph.edge_index[0], src_area[super_graph.edge_index[1]])
+        sa.index_add_(0, tgt, src_area[src] / deg[src])
+        
         super_graph.area = sa
         super_graph.source_area = src_area
     if hasattr(full_graph, 'normal') and full_graph.normal is not None:
@@ -121,11 +143,71 @@ def build_radius_graph(nodes, batch_vec, r_max=0.4, max_num_neighbors=256):
     edge_index = radius_graph(nodes, r=r_max, batch=batch_vec, max_num_neighbors=max_num_neighbors)
     return Data(pos=nodes, edge_index=edge_index, batch=batch_vec)
 
-def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_max=0.4):
+def _voronoi_bipartite_edges(full_nodes, full_batch, super_nodes, super_batch, r_max):
+    """Voronoi (partition) assignment: connect each full node to its SINGLE nearest supernode
+    within the same batch. Returns edge_index [2, E] with row0=super (target), row1=full
+    (source) -- the same convention as the radius path.
+
+    ``r_max`` gates the assignment: a full node farther than ``r_max`` from every supernode in
+    its batch is left unassigned. With a sufficiently large ``r_max`` this is a full partition
+    (each full node counted exactly once), so a supernode owns ~len(full)/len(super) nodes and
+    never overflows the radius path's neighbour cap. Pass ``r_max=None`` to disable the gate."""
+    tgt, src = [], []
+    for b in torch.unique(full_batch):
+        f_idx = (full_batch == b).nonzero(as_tuple=True)[0]
+        s_idx = (super_batch == b).nonzero(as_tuple=True)[0]
+        if f_idx.numel() == 0 or s_idx.numel() == 0:
+            continue
+        d = torch.cdist(full_nodes[f_idx], super_nodes[s_idx])       # [Fb, Sb]
+        mind, nearest = d.min(dim=1)                                 # nearest supernode per node
+        keep = mind <= r_max if r_max is not None else torch.ones_like(mind, dtype=torch.bool)
+        tgt.append(s_idx[nearest[keep]])
+        src.append(f_idx[keep])
+    if not tgt:
+        empty = torch.empty(0, dtype=torch.long, device=full_nodes.device)
+        return torch.stack([empty, empty], dim=0)
+    return torch.stack([torch.cat(tgt), torch.cat(src)], dim=0)
+
+
+def _sample_neighbors_per_super(edge_index, num_super, max_num_neighbors, seed, device):
+    """Reproducibly keep at most ``max_num_neighbors`` edges per supernode, chosen as a SEEDED
+    RANDOM subset of that supernode's neighbours. ``edge_index`` is [2, E] (row0=super). Where
+    a raw radius() call would truncate to whatever it happens to find first, this instead draws
+    a reproducible random sample of the supernode's full neighbourhood."""
+    row0, row1 = edge_index
+    E = row0.numel()
+    if E == 0:
+        return edge_index
+    gen = torch.Generator().manual_seed(int(seed))
+    prio = torch.rand(E, generator=gen).to(device)                  # random priority per edge
+    p_order = torch.argsort(prio)                                   # random shuffle
+    row0, row1 = row0[p_order], row1[p_order]
+    s_order = torch.argsort(row0, stable=True)                      # group by supernode (random within)
+    row0, row1 = row0[s_order], row1[s_order]
+    counts = torch.bincount(row0, minlength=num_super)
+    offsets = torch.cumsum(counts, 0) - counts                     # start index of each group
+    rank = torch.arange(E, device=device) - offsets[row0]          # within-group rank
+    keep = rank < max_num_neighbors
+    return torch.stack([row0[keep], row1[keep]], dim=0)
+
+
+def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_max=0.4,
+                          max_num_neighbors=128, voronoi=False, seed=None):
     """
-    Build the bipartite aggregation graph: every supernode gathers from the
-    full-graph nodes within ``r_max``. This is the supernode message-passing
-    structure (n_s supernodes aggregate their spatial neighbourhood).
+    Build the bipartite aggregation graph joining supernodes to full-graph nodes -- the
+    supernode message-passing structure (n_s supernodes aggregate a spatial neighbourhood).
+
+    Two aggregation modes:
+      * radius ball (default, ``voronoi=False``): each supernode gathers ALL full nodes within
+        ``r_max``. If a supernode has more than ``max_num_neighbors`` neighbours it is capped.
+        With ``seed=None`` the cap is radius()'s built-in truncation (keeps whatever it finds
+        first -- arbitrary order); pass an int ``seed`` to instead keep a REPRODUCIBLE RANDOM
+        subset of the supernode's full neighbourhood.
+      * voronoi (``voronoi=True``): each full node is assigned to its SINGLE nearest supernode
+        (a partition -- every node contributes to exactly one supernode), so no cap is needed
+        and each supernode owns ~len(full)/len(super) nodes. ``r_max`` still gates (a node
+        beyond ``r_max`` from every supernode is dropped); ``seed``/``max_num_neighbors`` are
+        unused in this mode.
 
     edge_index convention (radius(x=full, y=super)):
         edge_index[0] -> supernode (target / receiver) index into super_nodes
@@ -143,15 +225,27 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
     assert super_nodes.size(0) == super_batch.size(0), \
         f"Mismatch: super_nodes {super_nodes.size(0)} != super_batch {super_batch.size(0)}"
 
-    # radius(x=source, y=target): edges from full nodes (x) to supernodes (y).
-    edge_index = radius(
-        x=full_nodes,
-        y=super_nodes,
-        r=r_max,
-        batch_x=full_batch,
-        batch_y=super_batch,
-        max_num_neighbors=128,
-    )
+    if voronoi:
+        # Partition: each full node -> its single nearest supernode (no neighbour cap needed).
+        edge_index = _voronoi_bipartite_edges(full_nodes, full_batch,
+                                              super_nodes, super_batch, r_max)
+    elif seed is not None:
+        # Radius ball, but pick each supernode's <= max_num_neighbors as a SEEDED RANDOM
+        # subset: retrieve ALL neighbours first (cap = |full|), then subsample per supernode.
+        all_edges = radius(
+            x=full_nodes, y=super_nodes, r=r_max,
+            batch_x=full_batch, batch_y=super_batch,
+            max_num_neighbors=full_nodes.size(0),
+        )
+        edge_index = _sample_neighbors_per_super(all_edges, super_nodes.size(0),
+                                                max_num_neighbors, seed, full_nodes.device)
+    else:
+        # Radius ball with radius()'s built-in (arbitrary-order) cap -- original behaviour.
+        edge_index = radius(
+            x=full_nodes, y=super_nodes, r=r_max,
+            batch_x=full_batch, batch_y=super_batch,
+            max_num_neighbors=max_num_neighbors,
+        )
 
     return Data(
         pos=super_nodes,
@@ -163,7 +257,8 @@ def build_bipartite_graph(full_nodes, full_batch, super_nodes, super_batch, r_ma
 
 def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rate=0.9,
                              noise_std=0.0, key=None, sampling_mode='uniform', num_samples=None,
-                             max_num_neighbors=256, features=None, areas=None, normals=None):
+                             max_num_neighbors=256, features=None, areas=None, normals=None,
+                             recompute_area=False, area_k=8):
 
     if dropout_rate is not None and num_samples is not None:
         raise ValueError("Please provide either dropout_rate or num_samples, not both.")
@@ -192,6 +287,10 @@ def get_graphs_from_vertices(vertices_padded, masks=None, r_max=0.4, dropout_rat
         graph.x = features[batch_vec, selected_indices]
     if areas is not None:
         graph.area = areas[batch_vec, selected_indices]
+    if recompute_area:
+        # resolution-agnostic: estimate a_i from the CURRENT (post-dropout) cloud, so it
+        # reflects the actual sampling rather than inherited canonical areas.
+        graph.area = estimate_vertex_areas(nodes, batch_vec, area_k)
     if normals is not None:
         graph.normal = normals[batch_vec, selected_indices]
 

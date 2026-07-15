@@ -108,14 +108,18 @@ class SurfaceTriangulator:
         return vn
 
     def process(self, points) -> dict:
-        """-> dict with ``faces`` [F,3], ``areas`` [N] (barycentric mass), ``normals``
-        [N,3] (robust PCA normals)."""
+        """-> dict with ``faces`` [F,3] (reconstructed connectivity, for anyone who needs
+        a mesh) plus ``areas`` [N] and ``normals`` [N,3] from :class:`SurfaceMeasure`.
+
+        The areas/normals come from the point cloud directly (partition-of-unity Voronoi
+        areas + PCA normals), so they do NOT depend on the triangulation quality -- an
+        imperfect reconstruction can no longer distort the area/normal fields, and
+        ``sum_i areas[i] ~= surface area`` by construction."""
+        from src.preprocessing.surface_measure import SurfaceMeasure
         faces = self.triangulate(points)
-        return {
-            "faces": faces,
-            "areas": self.vertex_areas(points, faces),
-            "normals": self.pca_normals(points),
-        }
+        areas, normals = SurfaceMeasure(
+            k=self.k, orient="outward" if self.orient_normals else None)(points)
+        return {"faces": faces, "areas": areas, "normals": normals}
 
     def save_vtp(self, points, faces, path):
         """Write the reconstructed mesh (points + triangles) as a ``.vtp`` for inspection.

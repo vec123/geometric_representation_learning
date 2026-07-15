@@ -4,7 +4,9 @@ from torch_geometric.nn import global_mean_pool, global_add_pool
 from torch_geometric.utils import softmax as scatter_softmax
 from e3nn import o3
 from src.learning.layers.equivariant.Self_Spatial_layer import EquiLayer
-from src.learning.modules.equivariant.interaction import BipartiteSpatialConvolution
+from src.learning.modules.equivariant.interaction import (
+    BipartiteSpatialConvolution, MonteCarloBipartiteSpatialConvolution)
+
 from src.learning.modules.equivariant.transformer import build_equivariant_transformer
 from src.learning.modules.equivariant.irreps_utils import scalar_features, vector_features
 from src.learning.models.encoder_output import EncoderOutput
@@ -30,33 +32,50 @@ class GroupEncoder(nn.Module):
         
         # Define EquiLayers (Assuming stack of EquiLayer modules)
         # In PyG, we stack these in a ModuleList
-        in_irreps_str = irreps_cfg.get("input_irreps", "1x0e")
-        intermediate_irreps_str = irreps_cfg.get("intermediate_irreps", "32x0e + 32x0o + 16x1e + 16x1o")
-        output_irreps_str = irreps_cfg.get("output_irreps", f"{latent_dim}x0e + 2x1o")
-        self.out_irreps = o3.Irreps(output_irreps_str)
-
+        self.in_irreps_str = irreps_cfg.get("input_irreps", "1x0e")
+        self.intermediate_irreps_str = irreps_cfg.get("intermediate_irreps", "32x0e + 32x0o + 16x1e + 16x1o")
+        self.output_irreps_str = irreps_cfg.get("output_irreps", f"{latent_dim}x0e + 2x1o")
+        
+        
+    
         self.layers = nn.ModuleList([
-            EquiLayer(in_irreps=in_irreps_str,
-                        target_irreps=intermediate_irreps_str,
+            EquiLayer(in_irreps=self.in_irreps_str,
+                        target_irreps=self.intermediate_irreps_str,
                         spatial_sh_lmax = sh_lmax,
                         interaction_sh_lmax = 4,
                         verbose=verbose),
-            EquiLayer(in_irreps=intermediate_irreps_str,
-                       target_irreps=intermediate_irreps_str,
+            EquiLayer(in_irreps=self.intermediate_irreps_str,
+                       target_irreps=self.intermediate_irreps_str,
                         spatial_sh_lmax = sh_lmax,
                         interaction_sh_lmax = 4, 
                        verbose=verbose)
         ])
         
-        self.final_linear = o3.Linear(intermediate_irreps_str, output_irreps_str)
+         # Optional supernode aggregation: an equivariant bipartite conv maps the
+        # full-node features onto the supernodes (in_irreps == out_irreps, so the
+        # scalar count is unchanged). When enabled, the readout below pools over
+        # supernodes instead of nodes.
+        # Attention: if supergraph is None these are dead weights 
+        self.supernode_in_irreps = o3.Irreps(self.intermediate_irreps_str)   
+        self.supernode_out_irreps = o3.Irreps(self.intermediate_irreps_str)   
+        self.supernode_conv = MonteCarloBipartiteSpatialConvolution(
+                in_irreps=self.supernode_in_irreps, target_irreps=self.supernode_out_irreps,
+                sh_lmax=supernode_sh_lmax, verbose=verbose,
+            )
+                
+        # Optional equivariant transformer refinement of the pooled features, applied
+        # after supernode aggregation and before the scalars are filtered out. Selectable
+        # backend ('se3' | 'equiformer'); in-place on out_irreps so nothing downstream
+        # changes. Disable with transformer_type=None.
+        self.equi_transformer_irreps = o3.Irreps(self.intermediate_irreps_str)    
+        self.equi_transformer = build_equivariant_transformer(
+            transformer_type, self.equi_transformer_irreps, transformer_cfg, verbose=verbose,
+        )
 
-        # MLP Heads (shared by both readouts + the pose head)
-        self.mu_net = nn.Linear(latent_dim, latent_dim)
-        self.var_net = nn.Sequential(nn.Linear(latent_dim, latent_dim), nn.Softplus())
-        self.weight_net = nn.Linear(latent_dim, 1)
-
-        self.mu_bn = nn.BatchNorm1d(latent_dim)
-        self.mu_ln = nn.LayerNorm(latent_dim)
+       
+        self.out_irreps = o3.Irreps(self.output_irreps_str)
+        self.final_linear = o3.Linear(self.intermediate_irreps_str, self.output_irreps_str)
+         
         # Pool readout: one learned query cross-attends to all node scalars,
         # collapsing them to a single [latent_dim] token per graph (PerceiverReducer
         # with stages=[1]). The scalar width is latent_dim, so d_shared = latent_dim.
@@ -70,23 +89,15 @@ class GroupEncoder(nn.Module):
         elif readout != "mean":
             raise ValueError(f"readout must be 'attention' or 'mean', got {readout!r}")
 
-        # Optional supernode aggregation: an equivariant bipartite conv maps the
-        # full-node features onto the supernodes (in_irreps == out_irreps, so the
-        # scalar count is unchanged). When enabled, the readout below pools over
-        # supernodes instead of nodes.
-        # Attention: if supergraph is None these are dead weights    
-        self.supernode_conv = BipartiteSpatialConvolution(
-                in_irreps=self.out_irreps, target_irreps=self.out_irreps,
-                sh_lmax=supernode_sh_lmax, verbose=verbose,
-            )
+        # MLP Heads (shared by both readouts + the pose head)
+        self.mu_net = nn.Linear(latent_dim, latent_dim)
+        self.var_net = nn.Sequential(nn.Linear(latent_dim, latent_dim), nn.Softplus())
+        self.weight_net = nn.Linear(latent_dim, 1)
 
-        # Optional equivariant transformer refinement of the pooled features, applied
-        # after supernode aggregation and before the scalars are filtered out. Selectable
-        # backend ('se3' | 'equiformer'); in-place on out_irreps so nothing downstream
-        # changes. Disable with transformer_type=None.
-        self.equi_transformer = build_equivariant_transformer(
-            transformer_type, self.out_irreps, transformer_cfg, verbose=verbose,
-        )
+        self.mu_bn = nn.BatchNorm1d(latent_dim)
+        self.mu_ln = nn.LayerNorm(latent_dim)
+
+
 
     def forward(self,graph, supergraph):
 
@@ -97,8 +108,10 @@ class GroupEncoder(nn.Module):
         batch_idx = graph.batch
         node_area = getattr(graph, 'area', None) if self.area_pool else None
         node_normal = getattr(graph, 'normal', None)
+
         if node_normal is not None:
             x = torch.cat([x, node_normal], dim=-1)
+     
         if supergraph is not None:
             super_pos=supergraph.pos
             super_batch=supergraph.batch

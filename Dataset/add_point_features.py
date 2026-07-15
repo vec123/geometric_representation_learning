@@ -16,23 +16,21 @@ def process_vtp(input_path, output_path, verbose=False):
 
     # Compute area and normals depending on whether faces exist.
     if cells.size == 0:
-        from src.preprocessing.mesh_from_points import SurfaceTriangulator
-        tri = SurfaceTriangulator(k=16)
-        mesh_out = tri.process(points)
-        cells = mesh_out["faces"]
-        areas = mesh_out["areas"]
-        normals = mesh_out["normals"]
+        from src.preprocessing.surface_measure import SurfaceMeasure
+        # Faithful quadrature areas + normals straight from the point cloud -- no mesh, so
+        # an imperfect triangulation cannot distort them, and sum_i area_i ~= surface area.
+        areas, normals = SurfaceMeasure(k=16)(points)
         if verbose:
-            print(f"Triangulated point cloud: faces={cells.shape[0]}")
+            print(f"Point cloud: SurfaceMeasure areas+normals (no triangulation)")
     else:
         areas = vertex_areas(points, faces=cells)
         normals = vertex_normals(points, faces=cells)
 
-    # Normalize area weights to mean 1 for stable training
-    if areas.mean() > 0:
-        areas = areas.astype(np.float32) / float(np.mean(areas))
-    else:
-        areas = areas.astype(np.float32)
+    # Keep areas ABSOLUTE (a partition of unity): sum_i area_i ~= surface area, so the
+    # area-weighted aggregation is a genuine surface integral. The encoder's area weighting
+    # is scale-invariant (conv divides by Sum_j a_j; pool softmaxes log a), so there is no
+    # need to rescale per shape.
+    areas = np.asarray(areas, dtype=np.float32)
 
     # Orient normals consistently relative to the centroid.
     normals = np.asarray(normals, dtype=np.float32)
@@ -42,12 +40,6 @@ def process_vtp(input_path, output_path, verbose=False):
     direction[direction == 0] = 1.0
     normals = normals * direction
 
-    target_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-    alignment = np.sum(normals * target_direction, axis=-1, keepdims=True)
-    direction = np.sign(alignment)
-    direction[direction == 0] = 1.0
-    normals = normals * direction
-    
     # Normalize normals to unit length for proper glyph visualization
     norms = np.linalg.norm(normals, axis=-1, keepdims=True)
     normals = normals / np.clip(norms, 1e-12, None)

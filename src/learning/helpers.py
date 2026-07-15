@@ -16,7 +16,7 @@ from src.graphs.graphs import (
 from src.transforms.padding import pad_vertex_list
 import random
 
-def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle=True, verbose=True, load_fields=False):
+def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle=True, verbose=True, load_fields=False, seed = None):
     """Load face-part shapes and optional point fields; fall back to tests/data so the script always runs."""
     samples = []
     for part in parts if parts is not None else [None]:
@@ -42,6 +42,8 @@ def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle=True, v
         print("Dataset not found - falling back to tests/data shapes.")
 
     if shuffle:
+        if seed is not None:
+            random.seed(seed)
         if verbose:
             print("shuffling samples")
         random.shuffle(samples)
@@ -123,33 +125,44 @@ def split_dataset(*tensors, val_fraction=0.2, shuffle=True, seed=None):
     return train, val
 
 def build_training_graph(vertices, mask,
-                         key, 
-                         r_max=0.1, 
-                         dropout_rate=0.8, 
-                         n_supernodes = 10, 
+                         key,
+                         r_max=0.1,
+                         dropout_rate=0.8,
+                         n_supernodes = 10,
                          r_supergraph = 0.2,
                          use_supernodes= False,
                          sampling_mode_graph = "uniform",
                          sampling_mode_supernodes =  "uniform",
                          features=None,
                          areas=None,
-                         normals=None):
+                         normals=None,
+                         bipartite_voronoi=False,
+                         bipartite_seed=None,
+                         bipartite_max_neighbors=1024,
+                         recompute_area=False,
+                         area_k=8):
     """Build the graph fed to the encoder, per the USE_SUPERNODES toggle, and attach
     a constant 1x0e node feature (the encoder consumes `graph.x`).
 
     ``r_max`` / ``dropout_rate`` default to the module constants; the resampling loader
-    overrides them (and advances ``key``) to draw a fresh graph each training step."""
+    overrides them (and advances ``key``) to draw a fresh graph each training step.
+    ``bipartite_voronoi`` / ``bipartite_seed`` / ``bipartite_max_neighbors`` select the
+    supernode aggregation mode and its neighbour cap (see build_bipartite_graph)."""
 
     radius_graph = get_graphs_from_vertices(
             vertices, masks=mask, r_max=r_max, dropout_rate=dropout_rate, noise_std=0.0,
             key=key, sampling_mode=sampling_mode_graph,
-            features=features, areas=areas, normals=normals)
+            features=features, areas=areas, normals=normals,
+            recompute_area=recompute_area, area_k=area_k)
 
     if use_supernodes:
         super_graph = build_super_graph(vertices, mask, radius_graph,
                                    num_samples = n_supernodes,
                                     r_max = r_supergraph,
-                                    mode = sampling_mode_supernodes)
+                                    mode = sampling_mode_supernodes,
+                                    voronoi = bipartite_voronoi,
+                                    seed = bipartite_seed,
+                                    max_num_neighbors = bipartite_max_neighbors)
     else:
         super_graph = None
 

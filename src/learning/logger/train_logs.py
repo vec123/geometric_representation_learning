@@ -1,6 +1,6 @@
 import os
 import json
-
+import numpy as np
 import torch
 import matplotlib
 matplotlib.use("Agg")  # headless backend: save PNGs without a display / GUI event loop
@@ -118,17 +118,21 @@ class TrainingLogger:
         step number.
         """
         graph, super_graph, true_verts, mask = batch[0], batch[1], batch[2], batch[3]
-        self._save_graph_vtp(graph, step, name="input_graph", 
-                             is_supernodes=False, 
-                             subdir=subdir,
-                             max_num = max_num)
+        if graph is not None:
+            self._save_graph_vtp(graph, step, name="input_graph", 
+                                is_supernodes=False, 
+                                subdir=subdir,
+                                max_num = max_num)
         if super_graph is not None:
             self._save_graph_vtp(super_graph, step, name="supergraph", 
                                  is_supernodes=True, 
                                  subdir=subdir,
                                   max_num = max_num)
-        self._save_true_verts(true_verts, mask, step, subdir=subdir,  max_num = max_num)
-        self.visualize_results(pred, step, subdir=subdir,  max_num = max_num)
+        if true_verts is not None:
+            self._save_true_verts(true_verts, mask, step, subdir=subdir,  max_num = max_num)
+            
+        if pred is not None:
+            self.visualize_results(pred, step, subdir=subdir,  max_num = max_num)
 
     def visualize_val_batch(self, batch, pred, step):
         """Same as ``visualize_batch`` but writes to ``vtk/validation`` so the validation
