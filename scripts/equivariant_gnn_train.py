@@ -35,7 +35,11 @@ from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
 from config.root import get_project_root
-from src.learning.helpers import load_dataset, build_training_graph, save_graph_vtp
+from src.learning.helpers import (
+    load_dataset, 
+    split_dataset,
+    build_training_graph, 
+    save_graph_vtp)
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -74,11 +78,15 @@ VAL_EVERY      = 100           # run + save validation every N steps
 
 Project_ROOT = get_project_root()
 SHAPE_DATA_ROOT = os.path.join(Project_ROOT, 
-                               "Dataset", "vtp_samples",
-                                 "Dataset_faceparts_normalized_small")
-VAL_SHAPE_DATA_ROOT =  os.path.join(
-    Project_ROOT,
-    "Dataset", "vtp_samples", "val_Dataset_faceparts_normalized")
+                               "Dataset", "Primitives", "transitions")
+
+parts = ["box_to_ellipse_frames", "box_to_pyramid_frames",
+         "box_to_sphere_frames", "ellipse_to_box_frames", 
+         "ellipse_to_pyramid_frames", "ellipse_to_sphere_frames",
+         "pyramid_to_box_frames", "pyramid_to_ellipse_frames",
+         "pyramid_to_sphere_frames", "sphere_to_box_frames",
+         "sphere_to_ellipse_frames", "sphere_to_ellipse_frames",
+         "sphere_to_pyramid_frames" ]
 
 OUTPUT_DIR = os.path.join(Project_ROOT,
                           "training_log_contrastive_vae")
@@ -99,12 +107,19 @@ def main():
     key = torch.Generator(device="cpu")
     key.manual_seed(0)
 
-    parts = ["bridge", "nose"]
+   
     shape_vertices, shape_mask, shape_areas, shape_normals = load_dataset(
         data_path=SHAPE_DATA_ROOT,
         parts=parts,
         load_fields=True,
     )
+
+    # Hold out a fraction of the SAME loaded set for validation. One shared permutation
+    # splits all four arrays, so each shape's verts/mask/areas/normals stay aligned.
+    (shape_vertices, shape_mask, shape_areas, shape_normals), \
+    (val_shape_vertices, val_shape_mask, val_shape_areas, val_shape_normals) = split_dataset(
+        shape_vertices, shape_mask, shape_areas, shape_normals,
+        val_fraction=0.2, seed=0)
   
     graph, supergraph = build_training_graph(shape_vertices, 
                                 shape_mask,
@@ -187,13 +202,6 @@ def main():
     else:
         loader = OneBatchLoader((graph, supergraph, shape_vertices, shape_mask))
         print("loader: prebuilt graph reused every step")
-
-    
-    val_shape_vertices, val_shape_mask, val_shape_areas, val_shape_normals = load_dataset(
-        data_path=VAL_SHAPE_DATA_ROOT,
-        parts=parts,
-        load_fields=True,
-    )
 
     # Build the validation encoder graph from the VALIDATION geometry (not the training
     # verts) so the graph and its reconstruction target describe the same shapes.

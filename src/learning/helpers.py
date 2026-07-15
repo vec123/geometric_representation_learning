@@ -82,7 +82,47 @@ def load_dataset(data_path = "DATA_ROOT", parts = ["mouth", "nose"] ):
     return torch.tensor(padded, dtype=torch.float32), torch.tensor(mask, dtype=torch.bool)
 """
 
-def build_training_graph(vertices, mask, 
+def split_dataset(*tensors, val_fraction=0.2, shuffle=True, seed=None):
+    """Split shape-indexed tensors (as returned by ``load_dataset``) into train/val.
+
+    Every passed tensor is indexed by shape on dim 0 (vertices, mask, areas, normals,
+    ...) and is split with the SAME permutation, so each shape's rows stay aligned
+    across all arrays. Pass the arrays in whatever order ``load_dataset`` returned them:
+
+        train, val = split_dataset(*load_dataset(...), val_fraction=0.2, seed=0)
+        (verts, mask, areas, normals), (v_verts, v_mask, v_areas, v_normals) = train, val
+
+    ``val_fraction`` is the share of shapes held out for validation (clamped so both
+    splits keep at least one shape). ``shuffle`` randomizes which shapes land in val;
+    pass ``seed`` for a reproducible split. Returns ``(train_tensors, val_tensors)``,
+    each a tuple in the input order."""
+    if not tensors:
+        raise ValueError("split_dataset needs at least one tensor to split.")
+
+    n = tensors[0].shape[0]
+    for i, t in enumerate(tensors):
+        if t.shape[0] != n:
+            raise ValueError(
+                f"all tensors must share dim-0 length; tensor 0 has {n} shapes but "
+                f"tensor {i} has {t.shape[0]}.")
+    if n < 2:
+        raise ValueError(f"need at least 2 shapes to split, got {n}.")
+
+    n_val = int(round(val_fraction * n))
+    n_val = max(1, min(n_val, n - 1))   # keep both splits non-empty
+
+    if shuffle:
+        g = torch.Generator().manual_seed(int(seed)) if seed is not None else None
+        perm = torch.randperm(n, generator=g)
+    else:
+        perm = torch.arange(n)
+
+    val_idx, train_idx = perm[:n_val], perm[n_val:]
+    train = tuple(t[train_idx] for t in tensors)
+    val = tuple(t[val_idx] for t in tensors)
+    return train, val
+
+def build_training_graph(vertices, mask,
                          key, 
                          r_max=0.1, 
                          dropout_rate=0.8, 
