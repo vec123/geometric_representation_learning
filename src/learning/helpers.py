@@ -332,8 +332,10 @@ def verify_encoder_behaviour(
         canon = (pos, scalar_feats, normals, area, y)
         
         for _ in range(8):
-            ga, sga, _ = build_batch_fn([canon], device=device, dropout=0.3, key=res_key, **gcfg)
-            gb, sgb, _ = build_batch_fn([canon], device=device, dropout=0.6, key=res_key, **gcfg)
+            gcfg["dropout"] = 0.3
+            ga, sga, _ = build_batch_fn([canon], device=device,key=res_key, **gcfg)
+            gcfg["dropout"] = 0.6
+            gb, sgb, _ = build_batch_fn([canon], device=device, key=res_key, **gcfg)
             
             with torch.no_grad():
                 ma = encoder.encode(ga, sga, monte_carlo_reg=False)

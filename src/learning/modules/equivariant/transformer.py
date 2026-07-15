@@ -191,8 +191,8 @@ class SE3Transformer(nn.Module):
     position tensor invalidates the cache, so leaving it off is both correct and free.
     """
 
-    def __init__(self, irreps, num_layers=2, num_heads=4, hidden_channels=16,
-                 sh_lmax=2, radial_freqs=8, r_max=2.0, norm=True,
+    def __init__(self, irreps, num_layers=2, num_heads=4, num_channels=16,
+                 lmax=2, radial_freqs=8, r_max=2.0, norm=True,
                  precompute_bases=False, verbose=False):
         super().__init__()
         self.irreps = o3.Irreps(irreps)
@@ -201,17 +201,17 @@ class SE3Transformer(nn.Module):
         self.verbose = verbose
 
         # hidden_channels must divide evenly into heads for every degree; round up.
-        if hidden_channels % num_heads != 0:
-            hidden_channels = ((hidden_channels + num_heads - 1) // num_heads) * num_heads
+        if num_channels % num_heads != 0:
+            num_channels = ((num_channels + num_heads - 1) // num_heads) * num_heads
 
         # Geometry (shared across all layers): SH of relative positions + radial basis.
-        self.sh = o3.SphericalHarmonics([l for l in range(1, sh_lmax + 1)], normalize=True)
+        self.sh = o3.SphericalHarmonics([l for l in range(1, lmax + 1)], normalize=True)
         self.radial = RadialFourier(num_freqs=radial_freqs, r_max=r_max)
         radial_dim = 2 * radial_freqs
 
         self.layers = nn.ModuleList([
             SE3AttentionLayer(self.irreps, self.sh.irreps_out, num_heads,
-                              hidden_channels, radial_dim, verbose=verbose)
+                              num_channels, radial_dim, verbose=verbose)
             for _ in range(num_layers)
         ])
         self.norms = nn.ModuleList([

@@ -137,15 +137,21 @@ def build_batch(samples, S=16, r_max=0.22, r_super=0.5,
 # Model: encoder scalar latent (mu, over supernodes) -> classification head
 # --------------------------------------------------------------------------- #
 class SurfaceClassifier(nn.Module):
-    def __init__(self, num_classes, latent_dim=12, transformer_type='se3', area_pool=True):
+    def __init__(self, num_classes, latent_dim=12, transformer_type='equiformer', area_pool=True):
         super().__init__()
         # Slim (fits ~8 GB): narrow irreps, sh_lmax=1, transformer over the SUPERNODES.
         cfg = {
             'input_irreps': '1x0e + 1x1o',
-            'intermediate_irreps': '16x0e + 8x1o',
+            'intermediate_irreps': '16x0e + 8x1o + 4x2o',
             'output_irreps': f'{latent_dim}x0e + 2x1o',
         }
-        tcfg = {'num_layers': 1, 'num_heads': 2, 'hidden_channels': 8, 'sh_lmax': 1}
+        # The two transformer backends take different kwargs, so select per type:
+        #   se3:        hidden_channels / sh_lmax (its own geometry knobs)
+        #   equiformer: num_channels (uniform C) / lmax (must be >= max intermediate
+        #               degree, here 2 from the 4x2o), no sh_lmax.
+        
+        tcfg = {'num_layers': 1, 'num_heads': 2, 'num_channels': 8, 'lmax': 2}
+        
         self.encoder = GroupEncoder(latent_dim=latent_dim, irreps_cfg=cfg, sh_lmax=1,
                                     readout='mean', supernode_sh_lmax=2,
                                     transformer_type=transformer_type,
@@ -208,7 +214,7 @@ RESAMPLE_DROPOUT = DROPOUT_RATE
 CONSISTENCY_WEIGHT     = 0.0   # weight of the alignment loss; raise if views don't align, lower if recon stalls
        
 LEARNING_RATE  = 1e-3
-NUM_STEPS      = 15
+NUM_STEPS      = 1
 LOG_EVERY      = 1
 SAVE_EVERY     = 100
 VAL_EVERY      = 100           # run + save validation every N steps
@@ -269,7 +275,8 @@ def main():
                 r_max=R_MAX,
                 r_super=R_SUPERGRAPH,
                 super_mode=SUPERNODE_SAMPLING_MODE,
-                recompute_area =True
+                recompute_area =True,
+                dropout = DROPOUT_RATE
              )
    
     print(f"mode={'REMOTE/headless' if is_remote else 'local'}"  
@@ -342,43 +349,6 @@ def main():
         gcfg=gcfg
     )
     
-    """ 
-    rebuilt = []
-    for pos, scalar_feats, normals, area, y in probe:
-        Ri, ti = o3.rand_matrix(), torch.randn(3)
-        normals2 = normals.clone() @ Ri.T
-        rebuilt.append((pos @ Ri.T + ti, scalar_feats, normals2, area, y))
-    g2, sg2, _ = build_batch(rebuilt, device=device, **gcfg)
-    with torch.no_grad():
-        mu2 = model.encode(g2, sg2, monte_carlo_reg = False)
-        e2e_inv = (mu0 - mu2).abs().max().item()
-        rot_agree = (model.head(mu0).argmax(-1) == model.head(mu2).argmax(-1)).float().mean().item()
-    print(f"[2b] end-to-end (graph rebuilt via FPS): max|mu diff| = {e2e_inv:.2e} "
-             f"| prediction agreement = {rot_agree*100:.1f}%")
-
-    # [3] Resampling stability, in the canonical-dropout model: ONE canonical cloud per
-    # primitive, two DIFFERENT dropouts of it. Supernodes are FPS-sampled on the shared
-    # canonical cloud, so both views get the IDENTICAL supernode set -- only the current
-    # (dropped) vertices each supernode aggregates differ. This is the design under test:
-    # drift should come only from the area-weighted neighbourhood, not from a moving
-    # supernode set (which was the dominant source before). Geometry is fixed per class
-    # (one .vtp), so the 8 repeats just average over the random dropout realisations.
-    res_key = torch.Generator().manual_seed(7)
-    drifts, res_agree = [], []
-    for name in CLASSES:
-        pos, nrm, rel_area = _load_primitive(name)                     # canonical cloud (fixed per class)
-        scalar_feats = torch.ones(pos.shape[0], 1)
-        canon = (pos, scalar_feats , nrm,  rel_area.squeeze(-1), CLASSES.index(name))
-        for _ in range(8):
-            ga, sga, _ = build_batch([canon], device=device, dropout=0.3, key=res_key, **gcfg)
-            gb, sgb, _ = build_batch([canon], device=device, dropout=0.6, key=res_key, **gcfg)
-            with torch.no_grad():
-                ma, mb = model.encode(ga, sga,monte_carlo_reg = False), model.encode(gb, sgb, monte_carlo_reg = False)
-            drifts.append(((ma - mb).norm() / (ma.norm() + 1e-9)).item())
-            res_agree.append(int(model.head(ma).argmax() == model.head(mb).argmax()))
-    print(f"[3] resampling stability: mean relative latent drift = {np.mean(drifts):.3f} "
-             f"| class agreement = {100*np.mean(res_agree):.1f}%")
-    """
 
     summary = {
         "mode": "remote" if is_remote else "local",

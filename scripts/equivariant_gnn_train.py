@@ -137,7 +137,7 @@ def main():
                                 n_supernodes = N_SUPERNODES, 
                                  r_supergraph= R_SUPERGRPAH,
                                 use_supernodes= USE_SUPERNODES,
-                                sampling_mode_graph=DORPOUT_SAMPLING_MODE,
+                                sampling_mode_graph=DROPOUT_SAMPLING_MODE,
                                 sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE,
                                 areas=shape_areas,
                                 normals=shape_normals)
@@ -159,7 +159,7 @@ def main():
          "output_irreps": f"{LATENT_DIM}x0e + 2x1o"
     }
 
-    tcfg = {'num_layers': 1, 'num_heads': 2, 'hidden_channels': 8, 'sh_lmax': 2}
+    tcfg = {'num_layers': 2, 'num_heads': 2, 'hidden_channels': 8, 'sh_lmax': 2}
     transformer_type='equiformer'
     area_pool = True
 
@@ -193,7 +193,7 @@ def main():
             use_supernodes=USE_SUPERNODES,
             two_view=True,
             n_supernodes=N_SUPERNODES,
-            sampling_mode_graph=DORPOUT_SAMPLING_MODE,
+            sampling_mode_graph=DROPOUT_SAMPLING_MODE,
             sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE,
             areas=shape_areas,
             normals=shape_normals)

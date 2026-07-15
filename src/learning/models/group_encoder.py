@@ -67,6 +67,7 @@ class GroupEncoder(nn.Module):
         # after supernode aggregation and before the scalars are filtered out. Selectable
         # backend ('se3' | 'equiformer'); in-place on out_irreps so nothing downstream
         # changes. Disable with transformer_type=None.
+       
         self.equi_transformer_irreps = o3.Irreps(self.intermediate_irreps_str)    
         self.equi_transformer = build_equivariant_transformer(
             transformer_type, self.equi_transformer_irreps, transformer_cfg, verbose=verbose,
