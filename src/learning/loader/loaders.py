@@ -30,12 +30,19 @@ class ResamplingGraphLoader:
     in the first four slots so the logger (which reads ``batch[:4]``) is unaffected. The
     six-tuple is what ``TrainingStepper.train_step`` turns into a "same shape -> same
     encoding" alignment loss.
+
+    ``batch_size`` selects mini-batching over SHAPES (dim 0 of ``vertices``): when set and
+    smaller than the dataset, each step draws a fresh random subset of that many shapes and
+    builds the graph from only those. The yielded ``true_verts`` / ``mask`` are sliced to
+    the SAME subset so the decoder's reconstruction target matches the encoder's input; in
+    ``two_view`` mode both views use the same subset. ``None`` (default) keeps the original
+    full-batch behaviour (every shape, every step).
     """
     def __init__(self, vertices, mask, build_fn,
                   key=None, r_max=0.2, r_supergraph = 0.6, dropout_rate=0.8,
                   use_supernodes = False, two_view = False, n_supernodes = 15,
                   sampling_mode_graph = "uniform", sampling_mode_supernodes = "uniform",
-                  areas=None, normals=None):
+                  areas=None, normals=None, recompute_area=True, batch_size=None):
 
         self.vertices = vertices
         self.mask = mask
@@ -51,7 +58,8 @@ class ResamplingGraphLoader:
         self.sampling_mode_supernodes = sampling_mode_supernodes
         self.areas = areas
         self.normals = normals
-
+        self.recompute_area = recompute_area
+        self.batch_size = batch_size
     def _sample(self, value):
         """Return value as-is if scalar, else draw uniformly from a (low, high) range."""
         if isinstance(value, (tuple, list)):
@@ -60,10 +68,26 @@ class ResamplingGraphLoader:
             return low + u * (high - low)
         return value
 
-    def _draw(self):
-        """Build one fresh view (new dropout / node sampling) from the fixed geometry."""
-        return self.build_fn(
-            self.vertices, self.mask, key=self.key,
+    def _pick_indices(self):
+        """Draw a fresh random subset of shape indices, or None for the full batch."""
+        n = self.vertices.shape[0]
+        if self.batch_size is None or self.batch_size >= n:
+            return None
+        return torch.randperm(n, generator=self.key)[:self.batch_size]
+
+    def _draw(self, idx=None):
+        """Build one fresh view (new dropout / node sampling) from the fixed geometry.
+
+        ``idx`` (if given) restricts the graph to that subset of shapes; the matching
+        sliced ``(vertices, mask)`` are returned alongside so the caller can use them as
+        the reconstruction target.
+        """
+        verts = self.vertices if idx is None else self.vertices[idx]
+        mask = self.mask if idx is None else self.mask[idx]
+        areas = self.areas if (idx is None or self.areas is None) else self.areas[idx]
+        normals = self.normals if (idx is None or self.normals is None) else self.normals[idx]
+        graph, super_graph = self.build_fn(
+            verts, mask, key=self.key,
             r_max=self._sample(self.r_max),
             r_supergraph=self.r_supergraph,
             dropout_rate=self._sample(self.dropout_rate),
@@ -71,15 +95,19 @@ class ResamplingGraphLoader:
             use_supernodes=self.use_supernodes,
             sampling_mode_graph=self.sampling_mode_graph,
             sampling_mode_supernodes=self.sampling_mode_supernodes,
-            areas=self.areas,
-            normals=self.normals,
+            areas=areas,
+            normals=normals,
+            recompute_area = self.recompute_area
         )
+        return graph, super_graph, verts, mask
 
     def __iter__(self):
         while True:
-            graph_a, super_a = self._draw()
+            idx = self._pick_indices()
+            graph_a, super_a, verts, mask = self._draw(idx)
             if self.two_view:
-                graph_b, super_b = self._draw()
-                yield (graph_a, super_a, self.vertices, self.mask, graph_b, super_b)
+                # Same shape subset, fresh sampling -> "same shape -> same encoding".
+                graph_b, super_b, _, _ = self._draw(idx)
+                yield (graph_a, super_a, verts, mask, graph_b, super_b)
             else:
-                yield (graph_a, super_a, self.vertices, self.mask)
+                yield (graph_a, super_a, verts, mask)

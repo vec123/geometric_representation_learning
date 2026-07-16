@@ -182,19 +182,23 @@ def save_graph_vtp(graph,
                 vtp = create_polydata_w_lines(pos, edges)
                 vtp = add_point_field(vtp, field_data=node_field, field_name="super_node")
 
-                if hasattr(graph, 'area') and graph.area is not None:
+                if hasattr(graph, 'source_area') and graph.source_area is not None:
                     src_mask = (graph.source_batch == sample_idx)
                     tgt_mask = (graph.batch == sample_idx)
-                    src_area = graph.area[src_mask] if src_mask.any() else torch.tensor([])
+                    # Bipartite graph has two node sets with two area tensors: the full-graph
+                    # (source) areas on `source_area` [n_full] and the aggregated supernode
+                    # (target) areas on `area` [n_super]. Index each with ITS OWN mask --
+                    # slicing `area` with the source mask is the [n_full] vs [n_super] IndexError.
+                    src_area = graph.source_area[src_mask] if src_mask.any() else torch.tensor([])
                     tgt_area = graph.area[tgt_mask] if tgt_mask.any() else torch.tensor([])
                     area_field = torch.cat([src_area, tgt_area], dim=0).detach().cpu().numpy()
                     vtp = add_point_field(vtp, area_field.astype(np.float32), field_name="area")
 
-                if hasattr(graph, 'normal') and graph.normal is not None:
+                if hasattr(graph, 'source_normal') and graph.source_normal is not None:
                     src_mask = (graph.source_batch == sample_idx)
                     tgt_mask = (graph.batch == sample_idx)
-                    src_norm = graph.normal[src_mask] if src_mask.any() else torch.empty((0, 3), device=graph.normal.device)
-                    tgt_norm = torch.zeros((tgt_mask.sum().item(), 3), dtype=graph.normal.dtype, device=graph.normal.device)
+                    src_norm = graph.source_normal[src_mask] if src_mask.any() else torch.empty((0, 3), device=graph.source_normal.device)
+                    tgt_norm = torch.zeros((tgt_mask.sum().item(), 3), dtype=graph.source_normal.dtype, device=graph.source_normal.device)
                     normal_field = torch.cat([src_norm, tgt_norm], dim=0).detach().cpu().numpy()
                     vtp = add_point_field(vtp, normal_field.astype(np.float32), field_name="normal")
 
