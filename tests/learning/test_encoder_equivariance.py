@@ -49,12 +49,15 @@ def make_graph(seed=0):
 
 def make_encoder(seed=0):
     torch.manual_seed(seed)
-    cfg = {
-        'input_irreps': '1x0e',
-        'intermediate_irreps': '8x0e + 4x1o + 2x1e',
-        'output_irreps': '4x0e + 2x1o',   # 4 invariant scalars + 2 equivariant vectors
-    }
-    enc = GroupEncoder(latent_dim=4, irreps_cfg=cfg, sh_lmax=2, readout='mean', verbose=False)
+    layers_cfg = [{
+        'in_irreps': '1x0e',
+        'target_irreps': '8x0e + 4x1o + 2x1e',
+        'spatial_sh_lmax': 2,
+        'interaction_sh_lmax': 4,
+    }]
+    enc = GroupEncoder(layers_cfg=layers_cfg, latent_dim=4,
+                        output_irreps='4x0e + 2x1o',   # 4 invariant scalars + 2 equivariant vectors
+                        readout='mean', verbose=False)
     enc.eval()  # deterministic (no dropout / batchnorm active) so equivariance is exact
     return enc
 

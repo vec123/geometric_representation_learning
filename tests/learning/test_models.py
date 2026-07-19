@@ -27,12 +27,14 @@ def test_folding_decoder():
 
 def test_group_encoder_rotation():
     print('=== test_group_encoder_rotation ===')
-    layer_cfg = {
-        'input_irreps': '1x0e',
-        'intermediate_irreps': '1x0e + 1x1o',
-        'output_irreps': '4x0e + 2x1o',
-    }
-    encoder = GroupEncoder(latent_dim=4, irreps_cfg=layer_cfg, verbose=False)
+    layers_cfg = [{
+        'in_irreps': '1x0e',
+        'target_irreps': '1x0e + 1x1o',
+        'spatial_sh_lmax': 1,
+        'interaction_sh_lmax': 4,
+    }]
+    encoder = GroupEncoder(layers_cfg=layers_cfg, latent_dim=4,
+                            output_irreps='4x0e + 2x1o', verbose=False)
 
     v1 = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
     v2 = torch.tensor([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
@@ -56,13 +58,15 @@ def test_group_encoder_forward():
     num_nodes_per_graph = 10
     total_nodes = batch_size * num_nodes_per_graph
 
-    layer_cfg = {
-        'input_irreps': '1x0e',
-        'intermediate_irreps': '2x0e + 2x1o',
-        'output_irreps': f'{latent_dim}x0e + 2x1o',
-    }
+    layers_cfg = [{
+        'in_irreps': '1x0e',
+        'target_irreps': '2x0e + 2x1o',
+        'spatial_sh_lmax': 1,
+        'interaction_sh_lmax': 4,
+    }]
 
-    encoder = GroupEncoder(latent_dim=latent_dim, irreps_cfg=layer_cfg, verbose=False)
+    encoder = GroupEncoder(layers_cfg=layers_cfg, latent_dim=latent_dim,
+                            output_irreps=f'{latent_dim}x0e + 2x1o', verbose=False)
     encoder.eval()  # Set to evaluation mode
 
     # 2. Mock Data assembled into the PyG ``Data`` graph the encoder now consumes.

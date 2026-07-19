@@ -162,26 +162,27 @@ def main():
                    output_dir = os.path.join(OUTPUT_DIR, "init_supernodes"),
                    is_supernodes = True )
    
-    layer_cfg = {
-        "input_irreps": '1x0e + 1x1o',
-        "intermediate_irreps": "32x0e + 16x1o",
-       #  "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
-         "output_irreps": f"{LATENT_DIM}x0e + 2x1o"
-    }
+    layers_cfg = [{
+        "in_irreps": '1x0e + 1x1o',
+        "target_irreps": "32x0e + 16x1o",
+        "spatial_sh_lmax": 2,
+        "interaction_sh_lmax": 4,
+    }]
+    output_irreps = f"{LATENT_DIM}x0e + 2x1o"   # latent_dim scalars + 2 vectors (rotation frame)
 
     tcfg = {'num_layers': 2, 'num_heads': 2, 'num_channels': 8, 'lmax': 2}
     transformer_type='equiformer'
     area_pool = True
 
     encoder = GroupEncoder(
-        latent_dim=LATENT_DIM, 
-        irreps_cfg=layer_cfg, 
-        sh_lmax = 2,
+        layers_cfg=layers_cfg,
+        latent_dim=LATENT_DIM,
+        output_irreps=output_irreps,
         readout = "mean",
         readout_heads = 1,
         supernode_sh_lmax=2,
         transformer_type=transformer_type,
-        transformer_cfg=tcfg, 
+        transformer_cfg=tcfg,
         area_pool=area_pool,
         verbose=False)
     

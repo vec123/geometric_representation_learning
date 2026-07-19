@@ -47,6 +47,9 @@ class Registry:
 # Registrations: one line per component that exists TODAY. 
 # Each target string is checked against the real file it points to 
 # --------------------------------------------------------------------------- #
+Registry.register("encoder", "group_encoder",
+                   "src.learning.models.group_encoder:GroupEncoder")
+
 Registry.register("decoder", "folding",
                    "src.learning.models.folding_decoder:FoldingDecoder")
 Registry.register("decoder", "sphere_folding",

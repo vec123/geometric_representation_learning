@@ -95,16 +95,18 @@ if __name__ == "__main__":
 
     device = "cuda"
 
-    layer_cfg = {
-        "input_irreps": "1x0e",
-        "intermediate_irreps": "32x0e + 32x0o + 16x1o + 16x1e+ 4x2o+ 4x2e",
-        "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
-    }
+    layers_cfg = [{
+        "in_irreps": "1x0e",
+        "target_irreps": "32x0e + 32x0o + 16x1o + 16x1e+ 4x2o+ 4x2e",
+        "spatial_sh_lmax": 1,
+        "interaction_sh_lmax": 4,
+    }]
+    output_irreps = f"{LATENT_DIM}x0e + 2x1o"   # latent_dim scalars + 2 vectors (rotation frame)
 
     encoder = GroupEncoder(
-        latent_dim=LATENT_DIM, 
-        irreps_cfg=layer_cfg, 
-        sh_lmax = 1,
+        layers_cfg=layers_cfg,
+        latent_dim=LATENT_DIM,
+        output_irreps=output_irreps,
         readout = "mean",
         readout_heads = 1,
         verbose=False)

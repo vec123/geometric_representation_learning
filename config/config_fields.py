@@ -21,6 +21,7 @@ from dataclasses import dataclass, field, replace
 from typing import Optional, List, Tuple, Union
 
 import torch
+from e3nn import o3
 
 VALID_LOSS_TERMS = {"recon", "kl", "contrastive", "frobenius"}
 VALID_DECODER_TYPES = {"folding", "sphere_folding"}
@@ -29,29 +30,30 @@ _LARGE_WEIGHT_THRESHOLD = 1.5
 
 @dataclass
 class EncoderLayerConfig:
-    """Mirrors EquiLayer's constructor (Self_Spatial_layer.py:13-14).
-
-    GroupEncoder builds exactly ONE of these (group_encoder.py:41-47) 
-    single field on EncoderConfig
+    """Mirrors EquiLayer's constructor (Self_Spatial_layer.py:13-14). One entry
+    per EquiLayer GroupEncoder builds -- ``EncoderConfig.layers`` is a LIST of
+    these, chained in order (T7: GroupEncoder now builds one EquiLayer per
+    entry, and ``spatial_sh_lmax`` / ``interaction_sh_lmax`` genuinely reach it;
+    neither is silently defaulted or dropped inside GroupEncoder anymore).
     """
     in_irreps: str = "1x0e"
     target_irreps: str = "32x0e + 32x0o + 16x1e + 16x1o"
     spatial_sh_lmax: int = 1
-
-    # GroupEncoder hardcodes interaction_sh_lmax=4 when it builds its EquiLayer
-    # (group_encoder.py:45) and does not expose it as a constructor parameter --
-    # this field has NO EFFECT until GroupEncoder itself is changed to accept it.
-    # Kept (not dropped) because it IS a real EquiLayer parameter; T7's factory
-    # should know it can't forward this one, rather than silently pretending to.
     interaction_sh_lmax: int = 4
 
 
 @dataclass
 class EncoderConfig:
-    """Matches GroupEncoder's real constructor (group_encoder.py:16-25)."""
+    """Matches GroupEncoder's real constructor (group_encoder.py:16-25).
+
+    ``layers`` is a non-empty list, chained in order: entry i's ``target_irreps``
+    must equal entry i+1's ``in_irreps`` (checked in ``__post_init__``, using
+    ``o3.Irreps`` equality rather than string equality so equivalent but
+    differently-formatted irreps strings still match).
+    """
     encoder_type: str = "group_encoder"   # registry key (T6); only one exists today
     latent_dim: int = 5
-    layer: EncoderLayerConfig = field(default_factory=EncoderLayerConfig)
+    layers: List[EncoderLayerConfig] = field(default_factory=lambda: [EncoderLayerConfig()])
     readout: str = "mean"          # "mean" | "attention"
     readout_heads: int = 1         # only read when readout == "attention"
     supernode_sh_lmax: int = 4
@@ -59,6 +61,19 @@ class EncoderConfig:
     transformer_cfg: dict = field(default_factory=dict)
     area_pool: bool = False
     latent_mode: str = "gaussian"  # "gaussian" | "deterministic" -- T9's LatentHead strategy
+    verbose: bool = False
+
+    def __post_init__(self):
+        if not self.layers:
+            raise ValueError("EncoderConfig.layers must be non-empty.")
+        for i in range(len(self.layers) - 1):
+            out_ir = o3.Irreps(self.layers[i].target_irreps)
+            next_in_ir = o3.Irreps(self.layers[i + 1].in_irreps)
+            if out_ir != next_in_ir:
+                raise ValueError(
+                    f"layers[{i}].target_irreps ({self.layers[i].target_irreps!r}) must "
+                    f"equal layers[{i + 1}].in_irreps ({self.layers[i + 1].in_irreps!r})."
+                )
 
     @property
     def output_irreps(self) -> str:
@@ -81,13 +96,13 @@ class EncoderConfig:
 @dataclass
 class DecoderConfig:
     """Matches FoldingDecoder / SphereFoldingDecoder's shared constructor shape
-    (folding_decoder.py). ``hidden_dim`` was dropped: both decoders hardcode their
-    hidden width to 128 internally and take no such argument -- it was decorative.
+    (folding_decoder.py).
     """
     num_samples: int = 256
     latent_dim: int = 5
     n_freqs: int = 4
     decoder_type: str = "sphere_folding"  # "folding" | "sphere_folding" (registry key, T6)
+    verbose: bool = False
 
     @property
     def expects_tokens(self) -> int:
@@ -115,11 +130,7 @@ class LossConfig:
 @dataclass
 class TrainingConfig:
     """Optimization + the run's time axis.
-
-    ``num_steps`` / ``log_every`` / ``save_every`` / ``val_every`` replace v1's
-    ``num_epochs`` / ``checkpoint_every`` (which lived on ExperimentConfig): the
-    loaders here (OneBatchLoader, ResamplingGraphLoader) are infinite generators
-    with no notion of an epoch, and TrainingOrchestrator.run is literally
+    TrainingOrchestrator.run is 
     ``run(num_steps, log_every, save_every, val_every)`` (E3_end2end.py:159).
     """
     learning_rate: float = 1e-3   # v1 had 1e-5; equivariant_gnn_train.py uses 1e-3
@@ -140,17 +151,8 @@ RangeOrFixed = Union[float, Tuple[float, float]]
 
 @dataclass(frozen=True)
 class GraphSpec:
-    """Parameter Object for graph construction (T3), embedded in DataConfig below.
-
-    Names the data clump that used to travel, unbundled, across three signatures:
-    ``ResamplingGraphLoader.__init__`` -> ``build_training_graph`` ->
-    ``get_graphs_from_vertices``. Consumed directly by L1 components
-    (``RadiusGraphBuilder``, ``src/learning/data/builders.py``) as well as by this
-    config -- it is plain data, not config machinery, so components importing it
-    from here does not pull in the rest of ExperimentConfig.
-
-    ``r_max`` / ``dropout_rate`` may each be a fixed float or a ``(low, high)``
-    range, sampled fresh per call via :meth:`resolve`.
+    """
+    Parameter Object for graph construction.
     """
 
     r_max: RangeOrFixed = 0.1

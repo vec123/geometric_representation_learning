@@ -12,6 +12,11 @@ class FoldingDecoder(nn.Module):
         self.verbose = verbose
         self.grid_size = int(math.sqrt(num_samples))
 
+        # forward() hard-requires latent.shape[1] == 1 (see below). Exposed so a
+        # factory can check encoder/decoder compatibility on the constructed
+        # objects (INSTRUCTIONS.md T7 step 4).
+        self.expects_tokens = 1
+
         # Input dimension calculation:
         # grid: 2 channels * 2 * n_freqs = 4 * n_freqs
         # latent: latent_dim
@@ -128,6 +133,11 @@ class SphereFoldingDecoder(nn.Module):
         self.latent_dim = latent_dim
         self.n_freqs = n_freqs
         self.verbose = verbose
+
+        # forward() hard-requires latent.shape[1] == 1 (see below). Exposed so a
+        # factory can check encoder/decoder compatibility on the constructed
+        # objects (INSTRUCTIONS.md T7 step 4).
+        self.expects_tokens = 1
 
         # Fixed Fibonacci-sphere base [num_samples, 3]. Non-persistent buffer: deterministic
         # from num_samples (no need to checkpoint) but still moves with ``.to(device)``.

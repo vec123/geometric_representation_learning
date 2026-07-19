@@ -54,12 +54,14 @@ def make_batch():
 
 
 def make_models():
-    cfg = {
-        'input_irreps': '1x0e',
-        'intermediate_irreps': '4x0e + 2x1o',
-        'output_irreps': '4x0e + 2x1o',
-    }
-    encoder = GroupEncoder(latent_dim=4, irreps_cfg=cfg, verbose=False)
+    layers_cfg = [{
+        'in_irreps': '1x0e',
+        'target_irreps': '4x0e + 2x1o',
+        'spatial_sh_lmax': 1,
+        'interaction_sh_lmax': 4,
+    }]
+    encoder = GroupEncoder(layers_cfg=layers_cfg, latent_dim=4,
+                            output_irreps='4x0e + 2x1o', verbose=False)
     decoder = FoldingDecoder(num_samples=16, latent_dim=4, n_freqs=2, verbose=False)
     return encoder, decoder
 

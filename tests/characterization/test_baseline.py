@@ -51,15 +51,16 @@ def _seed_everything():
 
 
 def _build_encoder():
-    layer_cfg = {
-        "input_irreps": "1x0e",
-        "intermediate_irreps": "8x0e + 4x1o",
-        "output_irreps": f"{LATENT_DIM}x0e + 2x1o",
-    }
+    layers_cfg = [{
+        "in_irreps": "1x0e",
+        "target_irreps": "8x0e + 4x1o",
+        "spatial_sh_lmax": 1,
+        "interaction_sh_lmax": 4,
+    }]
     return GroupEncoder(
+        layers_cfg=layers_cfg,
         latent_dim=LATENT_DIM,
-        irreps_cfg=layer_cfg,
-        sh_lmax=1,
+        output_irreps=f"{LATENT_DIM}x0e + 2x1o",
         readout="mean",
         transformer_type="se3",
         transformer_cfg={"num_layers": 1, "num_heads": 2, "num_channels": 4, "lmax": 1},

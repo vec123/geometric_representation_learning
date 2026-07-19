@@ -6,6 +6,16 @@ def kl_divergence_loss(mean, log_var):
     # -0.5 * sum(1 + log_var - mean^2 - exp(log_var))
     return -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp(), dim=-1).mean()
 
+def frobenius_latent_loss(z):
+    """Auto-encoder latent regularizer: mean squared Frobenius norm of the batch
+    latent matrix, ||Z||_F^2 / B. Mean over B (not sum) keeps the weight
+    batch-size independent -- matching how kl_divergence_loss reduces (sum over
+    the latent dim, mean over the batch).
+
+    z: [B, D] batch latent matrix.
+    """
+    return z.pow(2).sum(dim=-1).mean()
+
 def geometric_clustering_loss(logits, edge_index, smoothness_weight=1.0, balance_weight=0.1, entropy_weight=0.1):
     probs = F.softmax(logits, dim=1)
     log_probs = F.log_softmax(logits, dim=1)

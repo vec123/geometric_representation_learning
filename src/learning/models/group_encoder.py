@@ -13,9 +13,9 @@ from src.learning.models.encoder_output import EncoderOutput
 from src.learning.modules.transformers.perceiver_encoder import PerceiverReducer
 
 class GroupEncoder(nn.Module):
-    def __init__(self, latent_dim: int = 5,
-                 irreps_cfg: dict = None,
-                 sh_lmax: int =1,
+    def __init__(self, layers_cfg,
+                 latent_dim: int = 5,
+                 output_irreps: str = None,
                  readout: str = "mean",
                  readout_heads: int = 1,
                  supernode_sh_lmax: int = 4,
@@ -23,29 +23,52 @@ class GroupEncoder(nn.Module):
                  transformer_cfg: dict = None,
                  area_pool: bool = False,
                  verbose: bool = False):
+        """``layers_cfg``: a non-empty list of per-layer dicts, one EquiLayer each,
+        threaded in order (layer i's output feeds layer i+1's input):
+
+            {"in_irreps": ..., "target_irreps": ..., "spatial_sh_lmax": ...,
+             "interaction_sh_lmax": ...}   # interaction_sh_lmax optional, default 4
+
+        ``spatial_sh_lmax`` has no default here on purpose -- every layer's caller
+        must state it explicitly rather than silently inherit an encoder-wide
+        value, since different layers legitimately want different lmax.
+        """
 
         super().__init__()
         self.latent_dim = latent_dim
         self.readout = readout
         self.area_pool = area_pool
         self.verbose = verbose
-        
-        # Define EquiLayers (Assuming stack of EquiLayer modules)
-        # In PyG, we stack these in a ModuleList
-        self.in_irreps_str = irreps_cfg.get("input_irreps", "1x0e")
-        self.intermediate_irreps_str = irreps_cfg.get("intermediate_irreps", "32x0e + 32x0o + 16x1e + 16x1o")
-        self.output_irreps_str = irreps_cfg.get("output_irreps", f"{latent_dim}x0e + 2x1o")
-        
-        
-    
+
+        if not layers_cfg:
+            raise ValueError("GroupEncoder requires at least one entry in layers_cfg.")
+
+        self.in_irreps_str = layers_cfg[0]["in_irreps"]
+        self.intermediate_irreps_str = layers_cfg[-1]["target_irreps"]
+        self.output_irreps_str = output_irreps or f"{latent_dim}x0e + 2x1o"
+
+        # Each layer's output must match the next layer's input -- otherwise the
+        # tensor-product chain inside EquiLayer fails with an opaque shape
+        # mismatch deep in the stack instead of a clear message here.
+        for i in range(len(layers_cfg) - 1):
+            out_ir = o3.Irreps(layers_cfg[i]["target_irreps"])
+            next_in_ir = o3.Irreps(layers_cfg[i + 1]["in_irreps"])
+            if out_ir != next_in_ir:
+                raise ValueError(
+                    f"layers_cfg[{i}]['target_irreps'] ({layers_cfg[i]['target_irreps']!r}) "
+                    f"must equal layers_cfg[{i + 1}]['in_irreps'] "
+                    f"({layers_cfg[i + 1]['in_irreps']!r})."
+                )
+
         self.layers = nn.ModuleList([
-            EquiLayer(in_irreps=self.in_irreps_str,
-                        target_irreps=self.intermediate_irreps_str,
-                        spatial_sh_lmax = sh_lmax,
-                        interaction_sh_lmax = 4,
+            EquiLayer(in_irreps=l["in_irreps"],
+                        target_irreps=l["target_irreps"],
+                        spatial_sh_lmax=l["spatial_sh_lmax"],
+                        interaction_sh_lmax=l.get("interaction_sh_lmax", 4),
                         verbose=verbose)
+            for l in layers_cfg
         ])
-        
+
          # Optional supernode aggregation: an equivariant bipartite conv maps the
         # full-node features onto the supernodes (in_irreps == out_irreps, so the
         # scalar count is unchanged). When enabled, the readout below pools over
@@ -92,6 +115,11 @@ class GroupEncoder(nn.Module):
 
         self.mu_bn = nn.BatchNorm1d(latent_dim)
         self.mu_ln = nn.LayerNorm(latent_dim)
+
+        # Both readouts ("mean" and "attention") collapse to one token per shape
+        # (see forward, below). Exposed so a factory can check encoder/decoder
+        # compatibility on the constructed objects (INSTRUCTIONS.md T7 step 4).
+        self.n_tokens = 1
 
 
 

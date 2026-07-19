@@ -11,7 +11,6 @@ from abc import ABC, abstractmethod
 import torch
 
 from src.graphs.graphs import get_graphs_from_vertices, build_super_graph
-from config.config_fields import GraphSpec
 
 
 class GraphBuilder(ABC):
@@ -45,7 +44,7 @@ class RadiusGraphBuilder(GraphBuilder):
     _BIPARTITE_SEED = None
     _BIPARTITE_MAX_NEIGHBORS = 1024
 
-    def __init__(self, spec: GraphSpec):
+    def __init__(self, spec):
         self.spec = spec
 
     def build(self, vertices, mask, rng, areas=None, normals=None):
@@ -86,7 +85,7 @@ class KNNGraphBuilder(GraphBuilder):
     stays a stub, honestly, until something actually needs it.
     """
 
-    def __init__(self, spec: GraphSpec):
+    def __init__(self, spec):
         self.spec = spec
 
     def build(self, vertices, mask, rng, areas=None, normals=None):

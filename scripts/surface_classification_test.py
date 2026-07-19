@@ -140,19 +140,21 @@ class SurfaceClassifier(nn.Module):
     def __init__(self, num_classes, latent_dim=12, transformer_type='equiformer', area_pool=True):
         super().__init__()
         # Slim (fits ~8 GB): narrow irreps, sh_lmax=1, transformer over the SUPERNODES.
-        cfg = {
-            'input_irreps': '1x0e + 1x1o',
-            'intermediate_irreps': '16x0e + 8x1o + 4x2o',
-            'output_irreps': f'{latent_dim}x0e + 2x1o',
-        }
+        layers_cfg = [{
+            'in_irreps': '1x0e + 1x1o',
+            'target_irreps': '16x0e + 8x1o + 4x2o',
+            'spatial_sh_lmax': 1,
+            'interaction_sh_lmax': 4,
+        }]
         # The two transformer backends take different kwargs, so select per type:
         #   se3:        hidden_channels / sh_lmax (its own geometry knobs)
         #   equiformer: num_channels (uniform C) / lmax (must be >= max intermediate
         #               degree, here 2 from the 4x2o), no sh_lmax.
-        
+
         tcfg = {'num_layers': 1, 'num_heads': 2, 'num_channels': 8, 'lmax': 2}
-        
-        self.encoder = GroupEncoder(latent_dim=latent_dim, irreps_cfg=cfg, sh_lmax=1,
+
+        self.encoder = GroupEncoder(layers_cfg=layers_cfg, latent_dim=latent_dim,
+                                    output_irreps=f'{latent_dim}x0e + 2x1o',
                                     readout='mean', supernode_sh_lmax=2,
                                     transformer_type=transformer_type,
                                     transformer_cfg=tcfg, area_pool=area_pool, verbose=False)

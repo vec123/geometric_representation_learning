@@ -224,12 +224,14 @@ def test_equi_layer_shape_and_equivariance():
 # GroupEncoder (end-to-end: invariant latent + equivariant pose)
 # --------------------------------------------------------------------------- #
 def _encoder_inputs(n=8):
-    irreps_cfg = {
-        'input_irreps': '1x0e',
-        'intermediate_irreps': '4x0e + 2x1o',
-        'output_irreps': '4x0e + 2x1o',
-    }
-    enc = GroupEncoder(latent_dim=4, irreps_cfg=irreps_cfg, verbose=False)
+    layers_cfg = [{
+        'in_irreps': '1x0e',
+        'target_irreps': '4x0e + 2x1o',
+        'spatial_sh_lmax': 1,
+        'interaction_sh_lmax': 4,
+    }]
+    enc = GroupEncoder(layers_cfg=layers_cfg, latent_dim=4,
+                        output_irreps='4x0e + 2x1o', verbose=False)
     x = torch.randn(n, 1)                 # 1x0e scalar per node
     pos = torch.randn(n, 3)
     edge_index = ring_edges(n)
