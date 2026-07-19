@@ -32,8 +32,11 @@ from src.learning.models.folding_decoder import FoldingDecoder
 from src.learning.models.group_perceiver_encoder import GroupPerceiverEncoder
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
 from src.learning.losses.composer import LossComposer, LossTerm
-from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
+from src.learning.callbacks.metrics import MetricsRecorder, MetricsPlotter
+from src.learning.callbacks.checkpointing import CheckpointWriter
+from src.learning.callbacks.visualization import GeometryVisualizer
+from src.learning.callbacks.validation import ValidationRunner
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
 
 from src.paths import get_project_root
@@ -198,11 +201,20 @@ def main():
     stepper = TrainingStepper(
         encoder, decoder, learning_rate=LEARNING_RATE,
         composer=LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)]))
-    logger = TrainingLogger(log_dir = OUTPUT_DIR)
-    trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader, val_loader=val_loader)
+    # Each callback carries its own cadence (T12); the orchestrator just loops.
+    recorder = MetricsRecorder(every_n_steps=LOG_EVERY)
+    callbacks = [
+        recorder,
+        MetricsPlotter(recorder, every_n_steps=VAL_EVERY),
+        CheckpointWriter(every_n_steps=SAVE_EVERY),
+        GeometryVisualizer(every_n_steps=SAVE_EVERY),
+        ValidationRunner(val_loader, every_n_steps=VAL_EVERY),
+    ]
+    trainer = TrainingOrchestrator(stepper=stepper, dataloader=loader,
+                                   callbacks=callbacks, log_dir=OUTPUT_DIR)
 
     print(f"----------training on device: {stepper.device}----------")
-    trainer.run(num_steps=NUM_STEPS, log_every=LOG_EVERY, save_every=SAVE_EVERY, val_every=VAL_EVERY)
+    trainer.run(num_steps=NUM_STEPS)
     print(f"done. outputs in {OUTPUT_DIR}")
     
 

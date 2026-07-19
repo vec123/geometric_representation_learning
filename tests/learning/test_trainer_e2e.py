@@ -24,6 +24,7 @@ from torch_geometric.data import Data
 
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
 from src.learning.losses.composer import LossComposer, LossTerm
+from src.learning.callbacks.base import Callback
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.models.folding_decoder import FoldingDecoder
 
@@ -136,21 +137,26 @@ class _RecordingStepper:
         return None, 0.5, {"recon": 0.4}
 
 
-class _RecordingLogger:
-    def __init__(self):
-        self.logged, self.saved, self.visualized = [], [], []
+class _RecordingCallback(Callback):
+    """Records which steps each hook fired on, honoring its own cadence."""
+    def __init__(self, every_n_steps=1):
+        super().__init__(every_n_steps)
+        self.started = 0
+        self.stepped, self.validated = [], []
+        self.ended = 0
 
-    def log_metrics(self, metrics, step):
-        self.logged.append(step)
+    def on_train_start(self, ctx):
+        self.started += 1
 
-    def save_checkpoint(self, state, step):
-        self.saved.append(step)
+    def on_step_end(self, ctx, step, metrics, batch, pred):
+        if self._due(step):
+            self.stepped.append(step)
 
-    def visualize_batch(self, batch, pred, step, *args, **kwargs):
-        self.visualized.append(step)
+    def on_validation_end(self, ctx, step, metrics, batch, pred):
+        self.validated.append(step)
 
-    def plot_metrics(self, *args, **kwargs):
-        pass
+    def on_train_end(self, ctx):
+        self.ended += 1
 
 
 class _InfiniteLoader:
@@ -160,17 +166,35 @@ class _InfiniteLoader:
             yield (None, None, None)
 
 
-def test_orchestrator_drives_stepper_and_logs_at_cadence():
+def test_orchestrator_drives_stepper_and_fires_hooks_at_each_cadence():
     stepper = _RecordingStepper()
-    logger = _RecordingLogger()
-    orch = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=_InfiniteLoader())
+    every_step = _RecordingCallback(every_n_steps=1)
+    every_other = _RecordingCallback(every_n_steps=2)
+    orch = TrainingOrchestrator(stepper=stepper, dataloader=_InfiniteLoader(),
+                                callbacks=[every_step, every_other])
 
-    orch.run(num_steps=4, log_every=2, save_every=2)
+    orch.run(num_steps=4)
 
     assert stepper.calls == 4, f"expected 4 steps, got {stepper.calls}"
-    assert logger.logged == [0, 2], f"log cadence wrong: {logger.logged}"
-    assert logger.saved == [0, 2], f"save cadence wrong: {logger.saved}"
-    assert logger.visualized == [0, 2], f"visualize cadence wrong: {logger.visualized}"
+    # Each callback keeps its OWN cadence -- the loop holds no log_every/save_every.
+    assert every_step.stepped == [0, 1, 2, 3], f"cadence 1 wrong: {every_step.stepped}"
+    assert every_other.stepped == [0, 2], f"cadence 2 wrong: {every_other.stepped}"
+    for cb in (every_step, every_other):
+        assert cb.started == 1 and cb.ended == 1, "train start/end must fire exactly once"
+
+
+def test_orchestrator_passes_total_and_terms_to_hooks():
+    stepper = _RecordingStepper()
+    seen = []
+
+    class _Capture(Callback):
+        def on_step_end(self, ctx, step, metrics, batch, pred):
+            seen.append(metrics)
+
+    TrainingOrchestrator(stepper=stepper, dataloader=_InfiniteLoader(),
+                         callbacks=[_Capture()]).run(num_steps=1)
+
+    assert seen == [{"loss": 0.5, "recon": 0.4}], f"unexpected metrics: {seen}"
 
 
 # --------------------------------------------------------------------------- #
@@ -188,13 +212,25 @@ class _OneBatchLoader:
 def test_orchestrator_runs_real_training_end_to_end():
     encoder, decoder = make_models()
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
-    logger = _RecordingLogger()
+    observer = _RecordingCallback()
     loader = _OneBatchLoader(make_batch())
 
-    orch = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader)
-    orch.run(num_steps=2, log_every=1, save_every=1)
+    orch = TrainingOrchestrator(stepper=stepper, dataloader=loader, callbacks=[observer])
+    orch.run(num_steps=2)
 
-    assert logger.logged == [0, 1], f"expected two logged steps, got {logger.logged}"
+    assert observer.stepped == [0, 1], f"expected two observed steps, got {observer.stepped}"
+
+
+def test_run_with_no_callbacks_still_trains():
+    """The loop must not depend on anyone listening."""
+    encoder, decoder = make_models()
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
+    before = decoder.fold2.weight.detach().clone()
+
+    TrainingOrchestrator(stepper=stepper,
+                         dataloader=_OneBatchLoader(make_batch())).run(num_steps=2)
+
+    assert not torch.allclose(before, decoder.fold2.weight.detach())
 
 
 # --------------------------------------------------------------------------- #

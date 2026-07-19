@@ -8,6 +8,7 @@ from src.learning.losses.losses import (
 )
 from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.models.encoder_output import EncoderOutput
+from src.learning.callbacks.base import TrainingContext
 
 
 def _resolve_device(device):
@@ -176,22 +177,38 @@ class TrainingStepper:
 
 
 class TrainingOrchestrator:
-    """Drives the training loop: fetch a batch, step, log/checkpoint at cadence.
+    """Drives the training loop and nothing else: fetch a batch, step, fire hooks.
 
-    The dataloader yields ``(graph, true_verts, padding_mask)`` batches, which are
-    forwarded to ``stepper.train_step(*batch)``.
+    The dataloader yields ``(graph, super_graph, true_verts, padding_mask)`` batches,
+    which are forwarded to ``stepper.train_step(*batch)``.
+
+    Everything that used to happen *around* the step -- logging, plotting,
+    checkpointing, VTP export, validation -- is now a ``Callback`` (T12), each with
+    its own cadence. This class is mechanism; the callbacks are policy.
     """
 
-    def __init__(self, stepper, logger, dataloader, val_loader=None):
+    def __init__(self, stepper, dataloader, callbacks=(), log_dir="logs"):
         self.stepper = stepper
-        self.logger = logger
         self.dataloader = dataloader
-        self.val_loader = val_loader
+        self.callbacks = list(callbacks)
+        self.log_dir = log_dir
 
-    def run(self, num_steps, log_every=100, save_every=20, val_every=10):
+    def run(self, num_steps):
+        """Get a batch, take a step, fire the hooks. Nothing else lives here.
+
+        Cadence is no longer this method's business -- there is no log_every /
+        save_every / val_every, because each callback owns its own
+        ``every_n_steps``. Adding early stopping, an LR schedule, or a new
+        artifact means adding a callback, not editing this loop.
+        """
+        ctx = TrainingContext(stepper=self.stepper, log_dir=self.log_dir,
+                              num_steps=num_steps, callbacks=self.callbacks)
+
+        for callback in self.callbacks:
+            callback.on_train_start(ctx)
+
         data_iter = iter(self.dataloader)
         for step in range(num_steps):
-
             try:
                 batch = next(data_iter)
             except StopIteration:
@@ -199,70 +216,19 @@ class TrainingOrchestrator:
                 batch = next(data_iter)
 
             pred, loss, breakdown = self.stepper.train_step(*batch)
+            # The composer's per-term split plus the total, under one key each.
+            # Splits are applied by MetricsRecorder, not here -- this loop doesn't
+            # know what "train" and "val" mean.
+            metrics = {"loss": loss, **breakdown}
 
-            if step % log_every == 0:
-                #print(f"Step {step} | Loss: {loss:.6f}")
-                # Whatever terms the run configured, logged under their own names --
-                # adding a term no longer means editing this dict. The `train/`
-                # prefix mirrors `val/` in run_validation so the two are directly
-                # comparable, both in metrics.json and on the plot.
-                metrics = {"train/loss": loss}
-                metrics.update({f"train/{name}": value for name, value in breakdown.items()})
-                self.logger.log_metrics(metrics, step)
+            for callback in self.callbacks:
+                callback.on_step_end(ctx, step, metrics, batch, pred)
 
-            if step % save_every == 0:
-                self.logger.save_checkpoint(self.stepper, step)
-                self.logger.visualize_batch(batch, pred, step)
-            if self.val_loader is not None and step % val_every == 0:
-                self.run_validation(step)
-                
-        # Final metrics plot so the run always leaves a train/val curve behind, even if
-        # the last step didn't land on a validation cadence.
-        self.logger.plot_metrics()
+            # Any callback may have asked to stop (see TrainingContext.stop).
+            if ctx.should_stop:
+                break
 
-    def run_validation(self, step, num_val_batches=1):
-        """Evaluate on the validation loader without touching the optimizer, log the
-        mean of EVERY loss term, and save the validation predictions as VTPs.
+        for callback in self.callbacks:
+            callback.on_train_end(ctx)
 
-        ``num_val_batches`` bounds how many batches to pull — the loaders here are
-        infinite generators (``OneBatchLoader``/``ResamplingGraphLoader``), so iterating
-        to exhaustion would never return. One batch covers the current single-batch
-        validation set; raise it if a batched val loader is wired in later."""
-        self.stepper.encoder.eval()
-        self.stepper.decoder.eval()
-        try:
-            val_iter = iter(self.val_loader)
-            val_losses = []
-            # term -> [running sum, batches that produced it]. Counting per term
-            # rather than dividing everything by num_val_batches keeps the mean
-            # honest if some batch can't produce a term (e.g. no posterior -> no kl).
-            term_totals = {}
-
-            last_batch, last_pred = None, None
-            for _ in range(num_val_batches):
-                batch = next(val_iter)
-                pred, loss, breakdown = self.stepper.eval_step(*batch)
-                val_losses.append(loss)
-                for name, value in breakdown.items():
-                    total, count = term_totals.get(name, (0.0, 0))
-                    term_totals[name] = (total + value, count + 1)
-
-                last_batch, last_pred = batch, pred
-
-            #print(f"Step {step} | Val Loss: {avg_val_loss:.6f}")
-            # Every term the validation pass produced, keyed val/<term> to mirror
-            # train/<term>. Previously this computed a recon/kl split and then threw
-            # it away, logging one opaque scalar -- a flat total can hide recon
-            # improving while the regularizer degrades.
-            metrics = {"val/loss": sum(val_losses) / len(val_losses)}
-            metrics.update({f"val/{name}": total / count
-                            for name, (total, count) in term_totals.items()})
-            self.logger.log_metrics(metrics, step)
-            # Save the validation reconstructions (and inputs/targets) to a separate
-            # subdir so they don't collide with the train-step VTPs at the same step.
-            self.logger.visualize_val_batch(last_batch, last_pred, step)
-            # Refresh the plot each validation so a long run shows live train-vs-val curves.
-            self.logger.plot_metrics()
-        finally:
-            self.stepper.encoder.train()
-            self.stepper.decoder.train()
+        return ctx

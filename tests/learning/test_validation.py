@@ -27,6 +27,10 @@ from torch_geometric.data import Data
 
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
 from src.learning.losses.composer import LossComposer, LossTerm
+from src.learning.callbacks.base import Callback
+from src.learning.callbacks.metrics import MetricsRecorder, MetricsPlotter
+from src.learning.callbacks.visualization import GeometryVisualizer
+from src.learning.callbacks.validation import ValidationRunner
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.models.folding_decoder import FoldingDecoder
@@ -116,28 +120,16 @@ class _RecordingStepper:
         return None, 0.25, {"recon": 0.2}
 
 
-class _RecordingLogger:
+class _RecordingCallback(Callback):
+    """Observes validation broadcasts without doing any work of its own."""
     def __init__(self):
-        self.logged, self.saved, self.visualized = [], [], []
-        self.val_logged, self.val_visualized = [], []
-        self.plotted = 0
+        super().__init__(every_n_steps=1)
+        self.validated = []
+        self.val_metrics = []
 
-    def log_metrics(self, metrics, step):
-        self.logged.append(step)
-        if "val/loss" in metrics:
-            self.val_logged.append(step)
-
-    def save_checkpoint(self, state, step):
-        self.saved.append(step)
-
-    def visualize_batch(self, batch, pred, step, subdir="vtk"):
-        self.visualized.append(step)
-
-    def visualize_val_batch(self, batch, pred, step):
-        self.val_visualized.append(step)
-
-    def plot_metrics(self, *args, **kwargs):
-        self.plotted += 1
+    def on_validation_end(self, ctx, step, metrics, batch, pred):
+        self.validated.append(step)
+        self.val_metrics.append(metrics)
 
 
 class _InfiniteLoader:
@@ -147,30 +139,43 @@ class _InfiniteLoader:
             yield (None, None, None, None)
 
 
-def test_orchestrator_runs_validation_at_cadence():
+def test_validation_runner_broadcasts_at_its_own_cadence():
     stepper = _RecordingStepper()
-    logger = _RecordingLogger()
+    observer = _RecordingCallback()
     orch = TrainingOrchestrator(
-        stepper=stepper, logger=logger,
-        dataloader=_InfiniteLoader(), val_loader=_InfiniteLoader())
+        stepper=stepper, dataloader=_InfiniteLoader(),
+        callbacks=[ValidationRunner(_InfiniteLoader(), every_n_steps=2), observer])
 
-    orch.run(num_steps=4, log_every=1, save_every=10, val_every=2)
+    orch.run(num_steps=4)
 
     assert stepper.eval_calls == 2, f"expected val at steps 0,2 -> 2 eval calls, got {stepper.eval_calls}"
-    assert logger.val_logged == [0, 2], f"val-loss log cadence wrong: {logger.val_logged}"
-    assert logger.val_visualized == [0, 2], f"val VTP cadence wrong: {logger.val_visualized}"
+    # ValidationRunner broadcasts on_validation_end to its PEERS -- that fan-out is
+    # what keeps the orchestrator ignorant that a validation set exists at all.
+    assert observer.validated == [0, 2], f"val broadcast cadence wrong: {observer.validated}"
 
 
-def test_orchestrator_skips_validation_without_val_loader():
+def test_no_validation_runner_means_no_validation():
     stepper = _RecordingStepper()
-    logger = _RecordingLogger()
-    orch = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=_InfiniteLoader())
+    observer = _RecordingCallback()
+    orch = TrainingOrchestrator(stepper=stepper, dataloader=_InfiniteLoader(),
+                                callbacks=[observer])
 
-    orch.run(num_steps=4, log_every=1, save_every=10, val_every=2)
+    orch.run(num_steps=4)
 
-    assert stepper.eval_calls == 0, "no val_loader -> validation must not run"
-    assert logger.val_visualized == [], "no val_loader -> no validation VTPs"
-    assert logger.plotted >= 1, "run() should still emit a final metrics plot"
+    assert stepper.eval_calls == 0, "no ValidationRunner -> validation must not run"
+    assert observer.validated == [], "no ValidationRunner -> no validation events"
+
+
+def test_validation_metrics_carry_total_and_terms():
+    stepper = _RecordingStepper()
+    observer = _RecordingCallback()
+    TrainingOrchestrator(
+        stepper=stepper, dataloader=_InfiniteLoader(),
+        callbacks=[ValidationRunner(_InfiniteLoader(), every_n_steps=1), observer],
+    ).run(num_steps=1)
+
+    assert observer.val_metrics == [{"loss": 0.25, "recon": 0.2}], \
+        f"unexpected validation metrics: {observer.val_metrics}"
 
 
 # --------------------------------------------------------------------------- #
@@ -230,12 +235,13 @@ def test_metrics_json_carries_per_term_train_and_val_series():
         composer=LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)]))
 
     with tempfile.TemporaryDirectory() as tmp:
-        logger = TrainingLogger(log_dir=tmp)
+        recorder = MetricsRecorder(every_n_steps=1, verbose=False)
         orch = TrainingOrchestrator(
-            stepper=stepper, logger=logger,
-            dataloader=_OneBatchLoader(make_batch()),
-            val_loader=_OneBatchLoader(make_batch()))
-        orch.run(num_steps=2, log_every=1, save_every=2, val_every=1)
+            stepper=stepper, dataloader=_OneBatchLoader(make_batch()),
+            callbacks=[recorder,
+                       ValidationRunner(_OneBatchLoader(make_batch()), every_n_steps=1)],
+            log_dir=tmp)
+        orch.run(num_steps=2)
 
         history = json.load(open(os.path.join(tmp, "metrics.json")))
 
@@ -260,21 +266,16 @@ def test_validation_logs_every_configured_term():
         encoder, decoder, learning_rate=1e-3, device='cpu',
         composer=LossComposer([LossTerm("recon", 1.0), LossTerm("frobenius", 0.01)]))
 
-    logged = {}
+    observer = _RecordingCallback()
+    TrainingOrchestrator(
+        stepper=stepper, dataloader=_OneBatchLoader(make_batch()),
+        callbacks=[ValidationRunner(_OneBatchLoader(make_batch()), every_n_steps=1),
+                   observer],
+    ).run(num_steps=1)
 
-    class _CapturingLogger(_RecordingLogger):
-        def log_metrics(self, metrics, step):
-            super().log_metrics(metrics, step)
-            logged.update(metrics)
-
-    orch = TrainingOrchestrator(
-        stepper=stepper, logger=_CapturingLogger(),
-        dataloader=_OneBatchLoader(make_batch()),
-        val_loader=_OneBatchLoader(make_batch()))
-    orch.run(num_steps=1, log_every=1, save_every=1, val_every=1)
-
-    assert "val/frobenius" in logged, f"configured term not logged: {sorted(logged)}"
-    assert "val/kl" not in logged, "unconfigured term must not appear"
+    terms = set().union(*observer.val_metrics)
+    assert "frobenius" in terms, f"configured term not reported: {sorted(terms)}"
+    assert "kl" not in terms, "unconfigured term must not appear"
 
 
 def test_validation_writes_vtps_and_metrics_plot():
@@ -284,12 +285,15 @@ def test_validation_writes_vtps_and_metrics_plot():
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
 
     with tempfile.TemporaryDirectory() as tmp:
-        logger = TrainingLogger(log_dir=tmp)
+        recorder = MetricsRecorder(every_n_steps=1, verbose=False)
         orch = TrainingOrchestrator(
-            stepper=stepper, logger=logger,
-            dataloader=_OneBatchLoader(make_batch()),
-            val_loader=_OneBatchLoader(make_batch()))
-        orch.run(num_steps=2, log_every=1, save_every=1, val_every=1)
+            stepper=stepper, dataloader=_OneBatchLoader(make_batch()),
+            callbacks=[recorder,
+                       MetricsPlotter(recorder, every_n_steps=1, verbose=False),
+                       GeometryVisualizer(every_n_steps=1),
+                       ValidationRunner(_OneBatchLoader(make_batch()), every_n_steps=1)],
+            log_dir=tmp)
+        orch.run(num_steps=2)
 
         val_dir = os.path.join(tmp, "vtk", "validation")
         assert os.path.isdir(val_dir), "validation VTP subdir was not created"
