@@ -5,7 +5,8 @@ Covers the contract that makes validation trustworthy and useful:
     * ``TrainingStepper.eval_step`` computes a finite loss WITHOUT moving any weights
       (no optimizer step, no gradient leak from being called next to training);
     * ``TrainingOrchestrator`` runs validation at the ``val_every`` cadence, logs a
-      ``val_loss``, and asks the logger to save the validation VTPs;
+      per-term ``val/<term>`` split alongside ``val/loss``, and asks the logger to
+      save the validation VTPs;
     * end-to-end, a run leaves validation prediction VTPs under ``vtk/validation`` and a
       ``metrics.png`` + ``metrics.json`` behind.
 
@@ -123,7 +124,7 @@ class _RecordingLogger:
 
     def log_metrics(self, metrics, step):
         self.logged.append(step)
-        if "val_loss" in metrics:
+        if "val/loss" in metrics:
             self.val_logged.append(step)
 
     def save_checkpoint(self, state, step):
@@ -215,6 +216,65 @@ def test_eval_step_breakdown_matches_train_step_keys():
     _, _, eval_breakdown = stepper.eval_step(*batch)
 
     assert set(train_breakdown) == set(eval_breakdown) == {"recon", "kl"}
+
+
+def test_metrics_json_carries_per_term_train_and_val_series():
+    """T11's deliverable: a real run's metrics.json must contain val/<term> keys,
+    not just one opaque val_loss -- and each must have a train/<term> counterpart
+    so the two are directly comparable on the plot."""
+    import json
+
+    encoder, decoder = make_models()
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=1e-3, device='cpu',
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)]))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        logger = TrainingLogger(log_dir=tmp)
+        orch = TrainingOrchestrator(
+            stepper=stepper, logger=logger,
+            dataloader=_OneBatchLoader(make_batch()),
+            val_loader=_OneBatchLoader(make_batch()))
+        orch.run(num_steps=2, log_every=1, save_every=2, val_every=1)
+
+        history = json.load(open(os.path.join(tmp, "metrics.json")))
+
+        assert {"val/loss", "val/recon", "val/kl"} <= set(history), \
+            f"validation per-term split missing from metrics.json: {sorted(history)}"
+        assert {"train/loss", "train/recon", "train/kl"} <= set(history), \
+            f"train per-term series missing from metrics.json: {sorted(history)}"
+
+        # Symmetry: every val term has a train counterpart, which is what makes a
+        # train-vs-val comparison per term possible at all.
+        val_terms = {k.split("/", 1)[1] for k in history if k.startswith("val/")}
+        train_terms = {k.split("/", 1)[1] for k in history if k.startswith("train/")}
+        assert val_terms <= train_terms, f"val-only terms: {val_terms - train_terms}"
+
+        assert "val_loss" not in history, "old un-prefixed key should be gone"
+
+
+def test_validation_logs_every_configured_term():
+    """The split must follow the loss config, not a hardcoded recon/kl pair."""
+    encoder, decoder = make_models()
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=1e-3, device='cpu',
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("frobenius", 0.01)]))
+
+    logged = {}
+
+    class _CapturingLogger(_RecordingLogger):
+        def log_metrics(self, metrics, step):
+            super().log_metrics(metrics, step)
+            logged.update(metrics)
+
+    orch = TrainingOrchestrator(
+        stepper=stepper, logger=_CapturingLogger(),
+        dataloader=_OneBatchLoader(make_batch()),
+        val_loader=_OneBatchLoader(make_batch()))
+    orch.run(num_steps=1, log_every=1, save_every=1, val_every=1)
+
+    assert "val/frobenius" in logged, f"configured term not logged: {sorted(logged)}"
+    assert "val/kl" not in logged, "unconfigured term must not appear"
 
 
 def test_validation_writes_vtps_and_metrics_plot():

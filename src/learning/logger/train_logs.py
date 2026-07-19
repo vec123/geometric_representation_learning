@@ -64,8 +64,11 @@ class TrainingLogger:
             json.dump(self.history, f, indent=2)
 
     def plot_metrics(self, filename="metrics.png"):
-        """Plot every logged metric series (train ``loss``, ``val_loss``, ...) on one
-        step axis and save a PNG next to the logs. No-ops on an empty history."""
+        """Plot every logged metric series (``train/loss``, ``val/recon``, ...) on one
+        step axis and save a PNG next to the logs. No-ops on an empty history.
+
+        Series names are only ever labels and dict keys here, never path segments,
+        so the ``train/`` and ``val/`` prefixes are safe on every platform."""
         series = {name: pts for name, pts in self.history.items() if pts}
         if not series:
             return

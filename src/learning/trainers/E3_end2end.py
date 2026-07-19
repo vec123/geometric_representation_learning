@@ -203,8 +203,11 @@ class TrainingOrchestrator:
             if step % log_every == 0:
                 #print(f"Step {step} | Loss: {loss:.6f}")
                 # Whatever terms the run configured, logged under their own names --
-                # adding a term no longer means editing this dict.
-                metrics = {"loss": loss, **breakdown}
+                # adding a term no longer means editing this dict. The `train/`
+                # prefix mirrors `val/` in run_validation so the two are directly
+                # comparable, both in metrics.json and on the plot.
+                metrics = {"train/loss": loss}
+                metrics.update({f"train/{name}": value for name, value in breakdown.items()})
                 self.logger.log_metrics(metrics, step)
 
             if step % save_every == 0:
@@ -219,7 +222,7 @@ class TrainingOrchestrator:
 
     def run_validation(self, step, num_val_batches=1):
         """Evaluate on the validation loader without touching the optimizer, log the
-        mean val loss, and save the validation predictions as VTPs.
+        mean of EVERY loss term, and save the validation predictions as VTPs.
 
         ``num_val_batches`` bounds how many batches to pull — the loaders here are
         infinite generators (``OneBatchLoader``/``ResamplingGraphLoader``), so iterating
@@ -230,22 +233,31 @@ class TrainingOrchestrator:
         try:
             val_iter = iter(self.val_loader)
             val_losses = []
+            # term -> [running sum, batches that produced it]. Counting per term
+            # rather than dividing everything by num_val_batches keeps the mean
+            # honest if some batch can't produce a term (e.g. no posterior -> no kl).
+            term_totals = {}
 
             last_batch, last_pred = None, None
             for _ in range(num_val_batches):
                 batch = next(val_iter)
                 pred, loss, breakdown = self.stepper.eval_step(*batch)
                 val_losses.append(loss)
+                for name, value in breakdown.items():
+                    total, count = term_totals.get(name, (0.0, 0))
+                    term_totals[name] = (total + value, count + 1)
 
                 last_batch, last_pred = batch, pred
 
-            avg_val_loss = sum(val_losses) / len(val_losses)
-
             #print(f"Step {step} | Val Loss: {avg_val_loss:.6f}")
-            # NOTE: `breakdown` now carries a per-term split of the validation loss,
-            # and this still logs only the total -- accumulating and logging every
-            # term as val/<term> is T11.
-            self.logger.log_metrics({"val_loss": avg_val_loss}, step)
+            # Every term the validation pass produced, keyed val/<term> to mirror
+            # train/<term>. Previously this computed a recon/kl split and then threw
+            # it away, logging one opaque scalar -- a flat total can hide recon
+            # improving while the regularizer degrades.
+            metrics = {"val/loss": sum(val_losses) / len(val_losses)}
+            metrics.update({f"val/{name}": total / count
+                            for name, (total, count) in term_totals.items()})
+            self.logger.log_metrics(metrics, step)
             # Save the validation reconstructions (and inputs/targets) to a separate
             # subdir so they don't collide with the train-step VTPs at the same step.
             self.logger.visualize_val_batch(last_batch, last_pred, step)
