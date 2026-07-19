@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from vtk.util import numpy_support
 
-from config.root import get_project_root
+from src.paths import get_project_root
 from src.graphs.graphs import sample_nodes
 from src.vtk.io import save_vtp
 

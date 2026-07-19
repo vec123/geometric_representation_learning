@@ -5,10 +5,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
 from src.learning.logger.train_logs import TrainingLogger
 
 

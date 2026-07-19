@@ -16,7 +16,7 @@ from src.graphs.graphs import (
     )
 from src.transforms.padding import pad_vertex_list
 
-from config.root import get_project_root
+from src.paths import get_project_root
 
 Project_ROOT = get_project_root()
 print("Project_ROOT: ", Project_ROOT)

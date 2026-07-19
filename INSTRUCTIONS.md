@@ -153,9 +153,13 @@ works only because Python puts the script's launch directory on `sys.path`. Ther
 
 5. Install the project in editable mode:
    ```bash
+   pip install -e . --no-build-isolation
+   ```
+   or
+   ```bash
    pip install -e .
    ```
-
+   to use a seperately built environment
 6. Delete the hand-rolled `sys.path` manipulation from the top of the test files.
 
 ### ✅ Verify

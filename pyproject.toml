@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geometric-representation-learning"
+version = "0.1.0"
+description = "Equivariant geometric representation learning on point-cloud surfaces (E3NN / PyTorch Geometric)"
+requires-python = ">=3.8"
+#authors = [{ name = "vec123", email = "none@test.com" }]
+
+# Pins mirror requirements.txt (the verified working environment: Python 3.8.10, CUDA 12.1).
+#
+# NOTE ON THE CUDA/PyG WHEELS
+# torch, torch_cluster and torch_scatter are installed here as local versions
+# (2.4.1+cu121, 1.6.3+pt24cu121, 2.1.2+pt24cu121). Per PEP 440 a specifier without a
+# local label — `==2.4.1` — is satisfied by `2.4.1+cu121`, so the pins below match the
+# installed wheels exactly and pip will NOT try to reinstall them. The local labels are
+# deliberately omitted because they are an install-channel detail, not a version.
+#
+# On a FRESH machine these three do not resolve from PyPI. Install them first:
+#   pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+#   pip install torch_cluster torch_scatter -f https://data.pyg.org/whl/torch-2.4.1+cu121.html
+# then `pip install -e .` for the rest.
+dependencies = [
+    # Core deep learning
+    "torch==2.4.1",
+    "torch-geometric==2.6.1",
+    "torch_cluster==1.6.3",
+    "torch_scatter==2.1.2",
+
+    # Equivariant neural networks
+    "e3nn==0.6.0",
+
+    # Scientific computing
+    "numpy==1.24.4",
+    "scipy==1.10.1",
+    "scikit-learn==1.3.2",
+
+    # Geometry processing
+    "vtk==9.5.2",
+    "robust_laplacian==1.0.0",
+    "potpourri3d==1.3",
+    "pyamg==5.1.0",
+
+    # Visualization
+    "matplotlib==3.7.5",
+
+    # Utilities
+    "tqdm==4.68.2",
+
+    # Experiment configs (INSTRUCTIONS.md T1 step 2; required by T13's config runner).
+    # Range rather than an exact pin: unlike the entries above there is no installed
+    # version to mirror. 6.x is the last series supporting Python 3.8.
+    "pyyaml>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0,<9.0"]
+
+# --------------------------------------------------------------------------- #
+# Packaging
+# --------------------------------------------------------------------------- #
+# This project imports as `src.learning...` and `config...` (see scripts/ and tests/),
+# so the REPO ROOT is the package root and `src` / `config` are top-level packages.
+# Neither has __init__.py files, so they are implicit namespace packages -> `namespaces`
+# must stay true. `include` restricts discovery to these two trees, keeping the vendored
+# Theory/ and the Dataset/ out of the distribution.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "config*"]
+namespaces = true
+
+# --------------------------------------------------------------------------- #
+# pytest
+# --------------------------------------------------------------------------- #
+# This section also anchors pytest's rootdir at the repo root, which is the job the
+# empty conftest.py in T1 step 3 does — keep both; conftest.py is what puts the root on
+# sys.path for test collection.
+#
+# `testpaths` and `norecursedirs` are not cosmetic: Theory/ is vendored third-party code
+# containing thousands of *_test.py files (DeepLearningExamples, equiformer_v3). Without
+# these, a bare `pytest` from the repo root tries to collect all of them.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    "Theory",
+    "Dataset",
+    "graphify-out",
+    "surface_classification",
+    "training_log*",
+    "*.egg-info",
+    ".git",
+]

@@ -2,9 +2,6 @@ import os
 import sys
 import torch
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
 
 from src.learning.models.folding_decoder import FoldingDecoder
 from src.learning.models.group_encoder import GroupEncoder

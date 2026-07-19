@@ -35,7 +35,7 @@ from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
 
-from config.root import get_project_root
+from src.paths import get_project_root
 from src.learning.helpers import load_dataset, build_training_graph, save_graph_vtp
 
 

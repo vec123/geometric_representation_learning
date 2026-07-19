@@ -2,10 +2,6 @@ import os
 import sys
 import torch
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
 from src.learning.losses.losses import (
     kl_divergence_loss,
     geometric_clustering_loss,

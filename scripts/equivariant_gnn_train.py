@@ -36,7 +36,7 @@ from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrat
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
-from config.root import get_project_root
+from paths import get_project_root
 from src.learning.helpers import (
     load_dataset, 
     split_dataset,

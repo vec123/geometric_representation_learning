@@ -1,11 +1,6 @@
 import os
 import sys
 import torch
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
 from src.vtk.io import save_vtp, load_vtp
 from src.vtk.extract import extract_vtp_points_cells
 from src.vtk.fields import add_point_field
@@ -17,7 +12,7 @@ from src.graphs.graphs import (
     get_bipartite_graph
 )
 from src.transforms.padding import pad_vertex_list
-from config.root import get_project_root
+from src.paths import get_project_root
 
 
 def load_shapes(names, project_root):

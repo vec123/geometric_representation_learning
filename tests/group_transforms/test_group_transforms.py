@@ -12,7 +12,7 @@ from src.transforms.group_transforms import (
     SE3_transform_numpy
     )
 
-from config.root import get_project_root
+from src.paths import get_project_root
 
 Project_ROOT = get_project_root()
 OUTPUT_DIR = os.path.join(Project_ROOT, "tests", "output_data")

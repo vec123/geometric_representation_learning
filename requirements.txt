@@ -27,3 +27,4 @@ matplotlib==3.7.5
 
 # Utilities
 tqdm==4.68.2
+wheel

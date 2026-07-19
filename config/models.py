@@ -20,7 +20,7 @@ class EncoderConfig:
     irreps_preset: str = "standard"  # or explicit in_irreps/intermediate/output
     
     # Supernode aggregation
-    use_supernodes: bool = False
+    use_supernodes: bool = True
     n_supernodes: int = 15
     supernode_sh_lmax: int = 4
     
