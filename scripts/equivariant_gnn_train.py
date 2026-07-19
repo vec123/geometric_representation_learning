@@ -15,6 +15,7 @@ needs the encoder's `readout` support, which is not wired yet.
 
 import os
 import glob
+from dataclasses import replace
 
 import torch
 import random
@@ -36,6 +37,7 @@ from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrat
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
+from src.learning.data.graph_spec import GraphSpec
 from paths import get_project_root
 from src.learning.helpers import (
     load_dataset, 
@@ -191,33 +193,31 @@ def main():
 
     # Reconstruction target: the full padded shapes. The graph fed to the encoder is
     # either resampled from geometry each step, or the single prebuilt graph above.
+    resample_spec = GraphSpec(
+        r_max=RESAMPLE_R_MAX,
+        r_supergraph=R_SUPERGRPAH,
+        dropout_rate=RESAMPLE_DROPOUT,
+        n_supernodes=N_SUPERNODES,
+        sampling_mode_graph=DROPOUT_SAMPLING_MODE,
+        sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE,
+        recompute_area=True,
+    )
     if CONTRASTIVE:
         loader = ResamplingGraphLoader(
-            shape_vertices, shape_mask, build_training_graph, key=key,
-            r_max=RESAMPLE_R_MAX,
-            r_supergraph=R_SUPERGRPAH,
-            dropout_rate=RESAMPLE_DROPOUT,
-            use_supernodes=USE_SUPERNODES,
-            two_view=True,
-            n_supernodes=N_SUPERNODES,
-            sampling_mode_graph=DROPOUT_SAMPLING_MODE,
-            sampling_mode_supernodes=SUPERNODE_SAMPLING_MODE,
-            areas=shape_areas,
-            normals=shape_normals,
-            recompute_area = True,
-            batch_size=BATCH_SIZE)
+            shape_vertices, shape_mask, build_training_graph,
+            # use_supernodes is set ONLY here, not in the elif below -- that asymmetry
+            # predates this refactor (the plain-resample path never forwarded it, so
+            # USE_SUPERNODES was silently ignored there); preserved as-is, not fixed.
+            replace(resample_spec, use_supernodes=USE_SUPERNODES),
+            rng=key, two_view=True, batch_size=BATCH_SIZE,
+            areas=shape_areas, normals=shape_normals)
         print("loader: two-view contrastive (two fresh samplings of the same shapes per step)"
               + (f", batch_size={BATCH_SIZE}" if BATCH_SIZE is not None else ""))
     elif RESAMPLE_GRAPH:
         loader = ResamplingGraphLoader(
-            shape_vertices, shape_mask, build_training_graph, key=key,
-            r_max=RESAMPLE_R_MAX,
-            r_supergraph=R_SUPERGRPAH,
-            dropout_rate=RESAMPLE_DROPOUT,
-            areas=shape_areas,
-            normals=shape_normals,
-            recompute_area=True,
-            batch_size=BATCH_SIZE)
+            shape_vertices, shape_mask, build_training_graph, resample_spec,
+            rng=key, batch_size=BATCH_SIZE,
+            areas=shape_areas, normals=shape_normals)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT}"
               + (f", batch_size={BATCH_SIZE}" if BATCH_SIZE is not None else "") + ")")
     else:
