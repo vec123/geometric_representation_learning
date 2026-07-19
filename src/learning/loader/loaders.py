@@ -14,16 +14,16 @@ class OneBatchLoader:
 class ResamplingGraphLoader:
     """Rebuilds the encoder graph from raw geometry each step with a fresh rng.
 
-    Graph-construction policy (radius, dropout rate, supernode settings, ...) is
-    collapsed into a single ``GraphSpec`` (src/learning/data/graph_spec.py) instead of
-    the ~10 loose keyword arguments this constructor used to forward untouched into
-    ``build_fn`` (INSTRUCTIONS.md T3). ``spec.resolve(rng)`` is called fresh each draw,
-    so a ranged field (e.g. ``r_max=(0.2, 0.3)``) is still sampled per step exactly as
-    before -- see ``GraphSpec.resolve``.
+    Graph construction is delegated to a ``GraphBuilder`` strategy
+    (src/learning/data/builders.py, INSTRUCTIONS.md T4): the loader calls
+    ``builder.build(verts, mask, rng, areas=..., normals=...)`` and knows nothing
+    about radii, dropout, or supernodes -- that policy lives on the ``GraphSpec``
+    the builder was constructed with. Swapping radius-graph for kNN construction is
+    now "pass a different ``GraphBuilder``", not a change to this class.
 
     ``vertices`` / ``mask`` / ``areas`` / ``normals`` stay as direct arguments: they are
     the loader's fixed per-shape geometry (parallel arrays, indexed identically), not a
-    construction choice, so they don't belong on the spec.
+    construction choice, so they don't belong on the builder/spec.
 
     The ``rng`` generator's state advances as it is consumed, giving a different graph
     each step while staying reproducible from the seed.
@@ -43,14 +43,13 @@ class ResamplingGraphLoader:
     ``two_view`` mode both views use the same subset. ``None`` (default) keeps the original
     full-batch behaviour (every shape, every step).
     """
-    def __init__(self, vertices, mask, build_fn, spec,
+    def __init__(self, vertices, mask, builder,
                  rng=None, two_view=False, batch_size=None,
                  areas=None, normals=None):
 
         self.vertices = vertices
         self.mask = mask
-        self.build_fn = build_fn
-        self.spec = spec
+        self.builder = builder
         self.rng = rng
         self.two_view = two_view
         self.batch_size = batch_size
@@ -76,28 +75,8 @@ class ResamplingGraphLoader:
         areas = self.areas if (idx is None or self.areas is None) else self.areas[idx]
         normals = self.normals if (idx is None or self.normals is None) else self.normals[idx]
 
-        # Resolved fresh each draw: a ranged field (r_max/dropout_rate as (low, high))
-        # is sampled now; a fixed field passes through untouched. Same rng, same order
-        # (r_max then dropout_rate) as the pre-GraphSpec _sample calls -- draw-for-draw
-        # reproducible with the old code.
-        spec = self.spec.resolve(self.rng)
-        graph, super_graph = self.build_fn(
-            verts, mask, key=self.rng,
-            r_max=spec.r_max,
-            r_supergraph=spec.r_supergraph,
-            dropout_rate=spec.dropout_rate,
-            n_supernodes=spec.n_supernodes,
-            use_supernodes=spec.use_supernodes,
-            sampling_mode_graph=spec.sampling_mode_graph,
-            sampling_mode_supernodes=spec.sampling_mode_supernodes,
-            areas=areas,
-            normals=normals,
-            recompute_area=spec.recompute_area,
-            area_k=spec.area_k,
-            # spec.noise_std has no home yet: build_training_graph hardcodes noise_std=0.0
-            # internally and takes no such argument (see GraphSpec's docstring). Wire it
-            # through once T4's GraphBuilder calls get_graphs_from_vertices directly.
-        )
+        graph, super_graph = self.builder.build(verts, mask, self.rng,
+                                                  areas=areas, normals=normals)
         return graph, super_graph, verts, mask
 
     def __iter__(self):

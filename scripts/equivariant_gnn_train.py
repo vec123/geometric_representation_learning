@@ -37,7 +37,8 @@ from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrat
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
-from src.learning.data.graph_spec import GraphSpec
+from config.config_fields import GraphSpec
+from src.learning.data.builders import RadiusGraphBuilder
 from paths import get_project_root
 from src.learning.helpers import (
     load_dataset, 
@@ -204,18 +205,18 @@ def main():
     )
     if CONTRASTIVE:
         loader = ResamplingGraphLoader(
-            shape_vertices, shape_mask, build_training_graph,
+            shape_vertices, shape_mask,
             # use_supernodes is set ONLY here, not in the elif below -- that asymmetry
             # predates this refactor (the plain-resample path never forwarded it, so
             # USE_SUPERNODES was silently ignored there); preserved as-is, not fixed.
-            replace(resample_spec, use_supernodes=USE_SUPERNODES),
+            RadiusGraphBuilder(replace(resample_spec, use_supernodes=USE_SUPERNODES)),
             rng=key, two_view=True, batch_size=BATCH_SIZE,
             areas=shape_areas, normals=shape_normals)
         print("loader: two-view contrastive (two fresh samplings of the same shapes per step)"
               + (f", batch_size={BATCH_SIZE}" if BATCH_SIZE is not None else ""))
     elif RESAMPLE_GRAPH:
         loader = ResamplingGraphLoader(
-            shape_vertices, shape_mask, build_training_graph, resample_spec,
+            shape_vertices, shape_mask, RadiusGraphBuilder(resample_spec),
             rng=key, batch_size=BATCH_SIZE,
             areas=shape_areas, normals=shape_normals)
         print(f"loader: resampling graph each step (r_max={RESAMPLE_R_MAX}, dropout={RESAMPLE_DROPOUT}"

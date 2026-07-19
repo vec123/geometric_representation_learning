@@ -488,10 +488,7 @@ A schema that lies is worse than no schema.
 
 ```bash
 python -m pytest tests/config -q
-python -c "
-from config.models import ExperimentConfig
-c = ExperimentConfig(); c.validate(); print('valid config ok')
-"
+python -c "from config.models import ExperimentConfig; c = ExperimentConfig(); c.validate(); print('valid config ok')"
 ```
 Also write a test asserting an *invalid* combination raises. Validation you never see fire is
 validation you don't know works.
@@ -577,13 +574,7 @@ Storing `"module:qualname"` **strings** and importing on first use fixes both.
 ### ✅ Verify
 
 ```bash
-python -c "
-import sys
-from src.learning.registry import Registry
-d = Registry.create('decoder', 'folding', num_samples=256, latent_dim=5)
-assert 'equiformer_v3' not in ' '.join(sys.modules), 'lazy import broken'
-print('lazy registry ok:', Registry.available('decoder'))
-"
+python -c "import sys; from src.learning.registry import Registry; d = Registry.create('decoder', 'folding', num_samples=256, latent_dim=5); assert 'equiformer_v3' not in ' '.join(sys.modules), 'lazy import broken'; print('lazy registry ok:', Registry.available('decoder'))"
 ```
 That assertion is the whole point of the task — it proves you didn't pay for what you didn't use.
 
