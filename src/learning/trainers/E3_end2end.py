@@ -3,9 +3,10 @@ import torch.optim as optim
 
 from src.learning.losses.losses import (
     combined_surface_loss,
-    kl_divergence_loss,
     contrastive_alignment_loss,
+    frobenius_latent_loss,
 )
+from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.models.encoder_output import EncoderOutput
 
 
@@ -24,22 +25,24 @@ class TrainingStepper:
     Contrastive objective ("same shape, different vertex sampling -> same encoding") is
     OPTIONAL and driven by the batch shape: hand ``train_step`` a SIX-tuple
     ``(graph_a, super_a, true_verts, mask, graph_b, super_b)`` and it encodes BOTH views,
-    reconstructs each against the shared target, and adds an alignment loss between the
-    two views' latents (scaled by ``contrastive_weight``; ``contrastive_var_weight``
-    scales a variance hinge that stops the encoder collapsing all shapes to one point).
-    A plain FOUR-tuple runs the ordinary single-view step (contrastive = 0), so
-    validation and non-contrastive training are unchanged.
+    reconstructs each against the shared target, and makes an alignment loss between the
+    two views' latents available as the ``contrastive`` term. A plain FOUR-tuple runs the
+    ordinary single-view step, where that term is simply absent.
+
+    Which terms actually count, and at what weight, is the ``composer``'s business
+    (T8/T10) -- this class computes every value it can and sums nothing itself.
     """
 
-    def __init__(self, encoder, decoder, learning_rate=1e-3, kl_weight=0.1,
-                 contrastive_weight=0.0, contrastive_var_weight=1.0,
+    def __init__(self, encoder, decoder, learning_rate=1e-3, composer=None,
                  device=None, verbose=False):
         self.device = _resolve_device(device)
         self.encoder = encoder.to(self.device)
         self.decoder = decoder.to(self.device)
-        self.kl_weight = kl_weight
-        self.contrastive_weight = contrastive_weight
-        self.contrastive_var_weight = contrastive_var_weight
+        # Loss POLICY is data now (T8/T10): which terms, their weights, and any
+        # per-term kwargs all live on the composer. The default is reconstruction
+        # alone -- deliberately NOT a hidden kl_weight=0.1 as before, so a run that
+        # never mentions KL never silently pays for it.
+        self.composer = composer if composer is not None else LossComposer([LossTerm("recon", 1.0)])
         self.verbose = verbose
         self.optimizer = optim.Adam(
             list(self.encoder.parameters()) + list(self.decoder.parameters()),
@@ -52,19 +55,24 @@ class TrainingStepper:
         assert isinstance(out, EncoderOutput)
         return out
 
-    def _encode_decode(self, graph, super_graph, true_verts, padding_mask):
-        """One view: encode -> reparameterize -> decode -> recon.
+    def _encode_decode(self, graph, super_graph, true_verts, padding_mask, deterministic):
+        """One view: encode -> latent -> decode -> recon.
 
-        Returns ``(pred, recon_loss, kl, mu)``. Does NOT touch the optimizer; the caller
-        assembles the total loss and decides whether to backprop."""
+        Returns ``(pred, recon_loss, enc)``. The whole ``EncoderOutput`` comes back
+        so the caller can ask it for whatever the configured terms need, without
+        this method knowing which terms exist -- or which KIND of encoder ran.
+        Does NOT touch the optimizer; the caller composes the total and decides
+        whether to backprop."""
         graph = graph.to(self.device)
         super_graph = super_graph.to(self.device) if super_graph is not None else None
         true_verts = true_verts.to(self.device)
         padding_mask = padding_mask.to(self.device)
 
         enc = self.encode(graph, super_graph)
-        mu = enc.mu                                    # [B, D] deterministic encoding
-        latent = self.reparameterize(mu, enc.logvar)
+        # THE latent seam. VAE -> a reparameterized sample (or mu when deterministic);
+        # auto-encoder -> its plain latent. One call, no branch on encoder kind, and
+        # the only surviving reparameterize in the codebase (EncoderOutput.sample).
+        latent = enc.sample(deterministic=deterministic)
         pred = self.decoder(latent)
 
         # The encoder's batch dim comes from graph.batch, which can desync from the
@@ -77,70 +85,94 @@ class TrainingStepper:
             )
 
         recon_loss = combined_surface_loss(pred, true_verts, padding_mask)
-        return pred, recon_loss, enc.kl(), mu
+        return pred, recon_loss, enc
 
-    def _total_loss(self, recon_loss, kl, contrastive):
-        """recon + kl_weight*kl + contrastive_weight*contrastive, with a finite guard.
+    def _loss_values(self, recon, enc_a, enc_b=None):
+        """Assemble ``{term name: Tensor | None}`` for the composer.
 
-        A non-finite loss (e.g. NaN gradients from cdist at coincident points) would
-        otherwise train silently to all-NaN weights and write NaN VTPs without error."""
-        loss = recon_loss
-        if kl is not None and self.kl_weight:
-            loss = loss + self.kl_weight * kl
-        if self.contrastive_weight:
-            loss = loss + self.contrastive_weight * contrastive
-        if not torch.isfinite(loss):
-            raise FloatingPointError(f"non-finite loss ({loss.item()}); aborting.")
-        return loss
+        Every term this trainer CAN produce is built here; the composer drops the
+        ones a run didn't configure, and ``None`` means "not available in this
+        mode" -- ``kl`` without a posterior (auto-encoder), ``contrastive``
+        outside a two-view step. That is what replaces the old ``if weight:``
+        chain, and what lets latent_mode be a pure config switch.
+
+        The latents used by ``contrastive``/``frobenius`` are always the
+        DETERMINISTIC encoding: those terms describe where a shape lands in
+        latent space, which shouldn't jitter with the reparameterization noise
+        that only the decoder path wants.
+        """
+        z_a = enc_a.sample(deterministic=True)
+        kl_a = enc_a.kl()                     # None whenever there is no posterior
+
+        if enc_b is None:
+            return {
+                "recon": recon,
+                "kl": kl_a,
+                "contrastive": None,          # training-only, two-view-only
+                "frobenius": frobenius_latent_loss(z_a),
+            }
+
+        z_b = enc_b.sample(deterministic=True)
+        assert z_a.shape == z_b.shape, (
+            f"two views produced different latent shapes {z_a.shape} vs {z_b.shape} "
+            f"(a shape likely dropped out of one view); lower the dropout rate."
+        )
+        kl_b = enc_b.kl()
+        return {
+            "recon": recon,
+            "kl": None if kl_a is None else 0.5 * (kl_a + kl_b),
+            # var_weight and friends ride along on the term itself, not on self.
+            "contrastive": contrastive_alignment_loss(
+                z_a, z_b, **self.composer.kwargs_for("contrastive")),
+            "frobenius": 0.5 * (frobenius_latent_loss(z_a) + frobenius_latent_loss(z_b)),
+        }
 
     def train_step(self, *batch):
-        """Single- or two-view step. Returns ``(pred, loss, recon, kl, contrastive)``
-        with every value but ``pred`` a python float for logging."""
+        """Single- or two-view step. Returns ``(pred, loss, breakdown)`` where
+        ``loss`` is a python float and ``breakdown`` maps each CONTRIBUTING term
+        name to its raw (unweighted) float value."""
         self.optimizer.zero_grad()
 
         if len(batch) == 6:
             graph_a, super_a, true_verts, mask, graph_b, super_b = batch
-            pred, recon_a, kl_a, mu_a = self._encode_decode(graph_a, super_a, true_verts, mask)
-            _,    recon_b, kl_b, mu_b = self._encode_decode(graph_b, super_b, true_verts, mask)
-            assert mu_a.shape == mu_b.shape, (
-                f"two views produced different latent shapes {mu_a.shape} vs {mu_b.shape} "
-                f"(a shape likely dropped out of one view); lower the dropout rate."
-            )
-            recon = 0.5 * (recon_a + recon_b)
-            kl = None if kl_a is None else 0.5 * (kl_a + kl_b)
-            contrastive = contrastive_alignment_loss(
-                mu_a, mu_b, var_weight=self.contrastive_var_weight)
+            pred, recon_a, enc_a = self._encode_decode(
+                graph_a, super_a, true_verts, mask, deterministic=False)
+            _,    recon_b, enc_b = self._encode_decode(
+                graph_b, super_b, true_verts, mask, deterministic=False)
+            values = self._loss_values(0.5 * (recon_a + recon_b), enc_a, enc_b)
         elif len(batch) == 4:
             graph, super_graph, true_verts, mask = batch
-            pred, recon, kl, _ = self._encode_decode(graph, super_graph, true_verts, mask)
-            contrastive = torch.zeros((), device=self.device)
+            pred, recon, enc = self._encode_decode(
+                graph, super_graph, true_verts, mask, deterministic=False)
+            values = self._loss_values(recon, enc)
         else:
             raise ValueError(
                 f"train_step expected a 4-tuple (single view) or 6-tuple (two views), "
                 f"got {len(batch)} elements."
             )
 
-        loss = self._total_loss(recon, kl, contrastive)
+        # The composer keeps the non-finite guard that used to live in _total_loss:
+        # a NaN would otherwise train silently to all-NaN weights and write NaN VTPs.
+        loss, breakdown = self.composer.compute(values)
         loss.backward()
         self.optimizer.step()
-
-        kl_val = 0.0 if kl is None else kl.item()
-        return pred, loss.item(), recon.item(), kl_val, contrastive.item()
+        return pred, loss.item(), breakdown
 
     @torch.no_grad()
     def eval_step(self, graph, super_graph, true_verts, padding_mask):
-        """Validation forward pass: single-view recon, no optimizer update. Returns
-        ``(pred, loss, recon, kl)`` (contrastive is a training-only term). Set
-        ``encoder``/``decoder`` to eval mode around this (the orchestrator does)."""
-        pred, recon, kl, _ = self._encode_decode(graph, super_graph, true_verts, padding_mask)
-        loss = self._total_loss(recon, kl, torch.zeros((), device=self.device))
-        kl_val = 0.0 if kl is None else kl.item()
-        return pred, loss.item(), recon.item(), kl_val
+        """Validation forward pass: single-view recon, no optimizer update.
+        Returns ``(pred, loss, breakdown)`` -- the SAME shape as ``train_step``,
+        which is what lets T11 log ``val/<term>`` against ``train/<term>``.
 
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        ``deterministic=True`` is an INTENTIONAL behavior change (T10 step 2):
+        validation used to reparameterize with fresh random noise under no_grad,
+        so identical weights on identical data scored differently run to run.
+        Expect VAE validation curves to shift slightly versus pre-T10 runs.
+        Set ``encoder``/``decoder`` to eval mode around this (the orchestrator does)."""
+        pred, recon, enc = self._encode_decode(
+            graph, super_graph, true_verts, padding_mask, deterministic=True)
+        loss, breakdown = self.composer.compute(self._loss_values(recon, enc))
+        return pred, loss.item(), breakdown
 
 
 class TrainingOrchestrator:
@@ -166,16 +198,13 @@ class TrainingOrchestrator:
                 data_iter = iter(self.dataloader)
                 batch = next(data_iter)
 
-            pred, loss, recon, kl, contrastive = self.stepper.train_step(*batch)
+            pred, loss, breakdown = self.stepper.train_step(*batch)
 
             if step % log_every == 0:
                 #print(f"Step {step} | Loss: {loss:.6f}")
-                metrics = {
-                    "loss": loss,
-                    "recon": recon,
-                    "kl": kl,
-                    "contrastive": contrastive,
-                }
+                # Whatever terms the run configured, logged under their own names --
+                # adding a term no longer means editing this dict.
+                metrics = {"loss": loss, **breakdown}
                 self.logger.log_metrics(metrics, step)
 
             if step % save_every == 0:
@@ -200,29 +229,22 @@ class TrainingOrchestrator:
         self.stepper.decoder.eval()
         try:
             val_iter = iter(self.val_loader)
-            val_losses, recon_val_losses, kl_val_losses = [], [], []
+            val_losses = []
 
             last_batch, last_pred = None, None
             for _ in range(num_val_batches):
                 batch = next(val_iter)
-                pred,loss,  recon, kl = self.stepper.eval_step(*batch)
+                pred, loss, breakdown = self.stepper.eval_step(*batch)
                 val_losses.append(loss)
-                recon_val_losses.append(recon)
-                kl_val_losses.append(kl)
-                
+
                 last_batch, last_pred = batch, pred
 
             avg_val_loss = sum(val_losses) / len(val_losses)
-            avg_recon_loss = sum(recon_val_losses) / len(val_losses)
-            avg_kl_loss = sum(kl_val_losses) / len(val_losses)
 
-            metrics = {
-                    "avg_val_loss": avg_val_loss,
-                    "avg_recon_loss": avg_recon_loss,
-                    "avg_kl_loss":avg_kl_loss
-                }
-            
             #print(f"Step {step} | Val Loss: {avg_val_loss:.6f}")
+            # NOTE: `breakdown` now carries a per-term split of the validation loss,
+            # and this still logs only the total -- accumulating and logging every
+            # term as val/<term> is T11.
             self.logger.log_metrics({"val_loss": avg_val_loss}, step)
             # Save the validation reconstructions (and inputs/targets) to a separate
             # subdir so they don't collide with the train-step VTPs at the same step.

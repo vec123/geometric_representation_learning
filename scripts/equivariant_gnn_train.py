@@ -34,6 +34,7 @@ from src.graphs.graphs import (
 from src.learning.models.folding_decoder import FoldingDecoder, SphereFoldingDecoder
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
+from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
@@ -243,11 +244,17 @@ def main():
     val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
 
 
+    # Loss composition is data now (T8/T10): terms carry their own weights, and a
+    # term that isn't listed simply never contributes. Adding e.g. a Frobenius
+    # regularizer for auto-encoder mode is one more LossTerm here, not a trainer edit.
+    loss_terms = [LossTerm("recon", 1.0), LossTerm("kl", KL_WEIGHT)]
+    if CONTRASTIVE:
+        loss_terms.append(LossTerm("contrastive", CONTRASTIVE_WEIGHT,
+                                   {"var_weight": CONTRASTIVE_VAR_WEIGHT}))
+
     stepper = TrainingStepper(encoder, decoder,
                                learning_rate=LEARNING_RATE,
-                               kl_weight=KL_WEIGHT,
-                               contrastive_weight=CONTRASTIVE_WEIGHT if CONTRASTIVE else 0.0,
-                               contrastive_var_weight=CONTRASTIVE_VAR_WEIGHT)
+                               composer=LossComposer(loss_terms))
     logger = TrainingLogger(log_dir = OUTPUT_DIR)
     trainer = TrainingOrchestrator(stepper=stepper, logger=logger, 
                                    dataloader=loader, val_loader=val_loader)

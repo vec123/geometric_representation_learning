@@ -27,6 +27,7 @@ from src.learning.helpers import load_dataset, build_training_graph
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.models.folding_decoder import FoldingDecoder
 from src.learning.trainers.E3_end2end import TrainingStepper
+from src.learning.losses.composer import LossComposer, LossTerm
 
 SEED = 0
 LATENT_DIM = 5
@@ -102,7 +103,12 @@ def baseline_run():
 
     encoder = _build_encoder()
     decoder = _build_decoder()
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, kl_weight=0.1, device="cpu")
+    # Post-T10 the loss weights live on a composer, not on the stepper. These terms
+    # reproduce the pre-T10 default exactly (recon + 0.1*kl, no contrastive), which
+    # is why the pinned numbers below are unchanged by that refactor.
+    composer = LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)])
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3,
+                              composer=composer, device="cpu")
     print(f"[baseline] stepper device={stepper.device}")
 
     with torch.no_grad():
@@ -119,10 +125,16 @@ def baseline_run():
     steps = []
     pred_shape = None
     for step in range(NUM_STEPS):
-        pred, loss, recon, kl, contrastive = stepper.train_step(*batch)
+        pred, loss, breakdown = stepper.train_step(*batch)
         if pred_shape is None:
             pred_shape = tuple(pred.shape)
             print(f"[baseline] pred.shape={pred_shape}")
+        # Terms the composer skipped are absent from `breakdown` post-T10; they are
+        # recorded as 0.0 to keep the pinned JSON's shape stable across the refactor
+        # (`contrastive` genuinely contributes nothing on this single-view path).
+        recon = breakdown.get("recon", 0.0)
+        kl = breakdown.get("kl", 0.0)
+        contrastive = breakdown.get("contrastive", 0.0)
         print(f"[baseline] step {step:2d} | loss={loss:.6f} recon={recon:.6f} "
               f"kl={kl:.6f} contrastive={contrastive:.6f}")
         steps.append({"loss": loss, "recon": recon, "kl": kl, "contrastive": contrastive})

@@ -20,6 +20,7 @@ from src.learning.models.latent_heads import (
 )
 from src.learning.registry import Registry
 from src.learning.trainers.E3_end2end import TrainingStepper
+from src.learning.losses.composer import LossComposer, LossTerm
 
 LATENT_DIM = 4
 
@@ -191,21 +192,52 @@ def test_encoder_rejects_unknown_latent_mode():
 # End-to-end: the auto-encoder mode trains (T9's headline deliverable)
 # --------------------------------------------------------------------------- #
 def test_deterministic_mode_trains_end_to_end():
-    """An auto-encoder run must step without a single `if` in the trainer:
-    EncoderOutput.sample() returns the deterministic latent, kl() returns None.
-
-    NOTE: this passes through TrainingStepper's CURRENT code path, which still
-    reads enc.mu directly -- so it exercises the head, not yet the consolidated
-    seam. T10 is what routes the trainer through sample().
-    """
+    """The T9+T10 headline: an auto-encoder run trains through the SAME trainer as
+    the VAE, with no branch anywhere -- EncoderOutput.sample() hands back the
+    deterministic latent and kl() returns None, so the composer just skips KL."""
     encoder = make_encoder("deterministic")
     decoder = FoldingDecoder(num_samples=16, latent_dim=LATENT_DIM, n_freqs=2, verbose=False)
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device="cpu")
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=1e-2, device="cpu",
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("frobenius", 0.01)]))
 
-    graph, supergraph, true_verts, mask = make_batch()
-    enc = stepper.encode(graph.to("cpu"), supergraph)
-    latent = enc.sample()
-    pred = decoder(latent)
+    before = decoder.fold2.weight.detach().clone()
+    pred, loss, breakdown = stepper.train_step(*make_batch())
 
     assert pred.shape == (2, 16, 3)
-    assert torch.isfinite(pred).all()
+    assert math.isfinite(loss)
+    assert set(breakdown) == {"recon", "frobenius"}, "AE mode must regularize by Frobenius, not KL"
+    assert not torch.allclose(before, decoder.fold2.weight.detach()), "no gradient reached the decoder"
+
+
+def test_gaussian_and_deterministic_share_one_trainer_path():
+    """latent_mode is a pure ablation switch: the only difference visible to the
+    trainer is which regularizer term shows up in the breakdown."""
+    terms_by_mode = {}
+    for mode, reg in [("gaussian", LossTerm("kl", 0.1)),
+                      ("deterministic", LossTerm("frobenius", 0.01))]:
+        encoder = make_encoder(mode)
+        decoder = FoldingDecoder(num_samples=16, latent_dim=LATENT_DIM, n_freqs=2, verbose=False)
+        stepper = TrainingStepper(
+            encoder, decoder, learning_rate=1e-2, device="cpu",
+            composer=LossComposer([LossTerm("recon", 1.0), reg]))
+        _, loss, breakdown = stepper.train_step(*make_batch())
+        assert math.isfinite(loss)
+        terms_by_mode[mode] = set(breakdown)
+
+    assert terms_by_mode == {"gaussian": {"recon", "kl"},
+                             "deterministic": {"recon", "frobenius"}}
+
+
+def test_kl_term_is_skipped_in_deterministic_mode():
+    """Even if a config slips a `kl` term past validation, an AE run can't produce
+    one -- kl() is None, so the composer drops it instead of crashing."""
+    encoder = make_encoder("deterministic")
+    decoder = FoldingDecoder(num_samples=16, latent_dim=LATENT_DIM, n_freqs=2, verbose=False)
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=1e-2, device="cpu",
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)]))
+
+    _, loss, breakdown = stepper.train_step(*make_batch())
+    assert math.isfinite(loss)
+    assert "kl" not in breakdown

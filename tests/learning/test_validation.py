@@ -25,6 +25,7 @@ import torch
 from torch_geometric.data import Data
 
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
+from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.models.folding_decoder import FoldingDecoder
@@ -76,7 +77,7 @@ def test_eval_step_does_not_update_parameters():
     graph, super_graph, true_verts, mask = make_batch()
 
     before = decoder.fold2.weight.detach().clone()
-    pred, loss, recon, kl = stepper.eval_step(graph, super_graph, true_verts, mask)
+    pred, loss, breakdown = stepper.eval_step(graph, super_graph, true_verts, mask)
     after = decoder.fold2.weight.detach()
 
     assert isinstance(loss, float) and math.isfinite(loss), f"bad val loss: {loss}"
@@ -105,13 +106,13 @@ class _RecordingStepper:
 
     def train_step(self, *batch):
         self.calls += 1
-        # (pred, loss, recon, kl, contrastive)
-        return None, 0.5, 0.4, 0.0, 0.0
+        # (pred, loss, breakdown)
+        return None, 0.5, {"recon": 0.4}
 
     def eval_step(self, *batch):
         self.eval_calls += 1
-        # (pred, loss, recon, kl)
-        return None, 0.25, 0.2, 0.0
+        # (pred, loss, breakdown) -- same shape as train_step post-T10
+        return None, 0.25, {"recon": 0.2}
 
 
 class _RecordingLogger:
@@ -181,6 +182,39 @@ class _OneBatchLoader:
     def __iter__(self):
         while True:
             yield self.batch
+
+
+def test_eval_step_is_deterministic():
+    """T10 step 2's intentional behavior change: validation used to reparameterize
+    with fresh random noise under no_grad, so the same weights on the same data
+    scored differently every call. It must now be repeatable."""
+    encoder, decoder = make_models()
+    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device='cpu')
+    encoder.eval()
+    decoder.eval()
+    batch = make_batch()
+
+    _, loss_a, _ = stepper.eval_step(*batch)
+    _, loss_b, _ = stepper.eval_step(*batch)
+
+    assert loss_a == loss_b, (
+        f"eval_step is not deterministic ({loss_a} != {loss_b}); it is injecting noise")
+
+
+def test_eval_step_breakdown_matches_train_step_keys():
+    """T11 depends on this: val/<term> can only line up against train/<term> if
+    both paths key their breakdowns identically. `contrastive` is the documented
+    exception -- it is training-only and two-view-only."""
+    encoder, decoder = make_models()
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=1e-2, device='cpu',
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)]))
+    batch = make_batch()
+
+    _, _, train_breakdown = stepper.train_step(*batch)
+    _, _, eval_breakdown = stepper.eval_step(*batch)
+
+    assert set(train_breakdown) == set(eval_breakdown) == {"recon", "kl"}
 
 
 def test_validation_writes_vtps_and_metrics_plot():

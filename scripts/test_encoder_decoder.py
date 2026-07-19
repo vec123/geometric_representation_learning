@@ -28,6 +28,7 @@ from src.graphs.graphs import (
 from src.learning.models.folding_decoder import FoldingDecoder
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
+from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
@@ -162,7 +163,9 @@ if __name__ == "__main__":
     """
 
         
-    stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE, kl_weight=0.0)
+    stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE,
+                              # kl_weight=0.0 pre-T10 == simply not listing a kl term.
+                              composer=LossComposer([LossTerm("recon", 1.0)]))
     logger = TrainingLogger(log_dir = OUTPUT_DIR)
     
     shape_graph = shape_graph.to(device)
@@ -172,8 +175,8 @@ if __name__ == "__main__":
     print("mu.shape: ", mu.shape)
 
    
-    decodings, loss, recon, kl = stepper.eval_step(shape_graph, shape_supergraph, shape_vertices, shape_mask)
-    print("loss: ", loss, "recon", recon,  "kl: ", kl) 
+    decodings, loss, breakdown = stepper.eval_step(shape_graph, shape_supergraph, shape_vertices, shape_mask)
+    print("loss: ", loss, "| terms:", breakdown)
     batch = (shape_graph, shape_supergraph, shape_vertices, shape_mask)
     logger.visualize_batch(batch, decodings, step = 1, subdir = "vtk", max_num = 102)
 

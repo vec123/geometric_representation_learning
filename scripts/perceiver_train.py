@@ -31,6 +31,7 @@ from src.graphs.graphs import (
 from src.learning.models.folding_decoder import FoldingDecoder
 from src.learning.models.group_perceiver_encoder import GroupPerceiverEncoder
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
+from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.logger.train_logs import TrainingLogger
 from src.learning.logger.headless import enable_headless
 from src.learning.loader.loaders import OneBatchLoader, ResamplingGraphLoader
@@ -191,7 +192,12 @@ def main():
 
     val_loader = OneBatchLoader((val_graph, val_supergraph, val_shape_vertices, val_shape_mask))
 
-    stepper = TrainingStepper(encoder, decoder, learning_rate=LEARNING_RATE)
+    # recon + 0.1*kl was TrainingStepper's implicit default before T10 moved loss
+    # weights onto the composer; stated explicitly here so this script's behavior
+    # is unchanged (and visible) rather than inherited from a constructor default.
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=LEARNING_RATE,
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("kl", 0.1)]))
     logger = TrainingLogger(log_dir = OUTPUT_DIR)
     trainer = TrainingOrchestrator(stepper=stepper, logger=logger, dataloader=loader, val_loader=val_loader)
 

@@ -36,6 +36,24 @@ class LossComposer:
         with those fields. No config import here."""
         self.terms = list(terms)
 
+    def names(self):
+        """Configured term names, in order."""
+        return [name for name, _, _ in self.terms]
+
+    def kwargs_for(self, name):
+        """Extra keyword arguments configured for ``name`` (``{}`` if unconfigured).
+
+        The composer never calls loss functions itself -- it sums values that are
+        already computed -- so these are for the CALLER that computes the term,
+        e.g. the trainer passing ``var_weight`` into ``contrastive_alignment_loss``.
+        Keeping such per-term hyperparameters on the term is what stops them
+        becoming extra TrainingStepper constructor arguments (T10 step 6).
+        """
+        for term_name, _, kwargs in self.terms:
+            if term_name == name:
+                return dict(kwargs or {})
+        return {}
+
     def compute(self, values):
         """`values`: {name: Tensor | None}. Returns (total_scalar, {name: float}).
 

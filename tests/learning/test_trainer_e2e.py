@@ -23,6 +23,7 @@ import torch
 from torch_geometric.data import Data
 
 from src.learning.trainers.E3_end2end import TrainingStepper, TrainingOrchestrator
+from src.learning.losses.composer import LossComposer, LossTerm
 from src.learning.models.group_encoder import GroupEncoder
 from src.learning.models.folding_decoder import FoldingDecoder
 
@@ -72,11 +73,12 @@ def test_training_step_returns_finite_loss_and_points():
     encoder, decoder = make_models()
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2, device='cpu')
 
-    pred, loss, recon, kl, contrastive = stepper.train_step(*make_batch())
+    pred, loss, breakdown = stepper.train_step(*make_batch())
 
     assert isinstance(loss, float) and math.isfinite(loss), f"bad loss: {loss}"
     assert pred.shape == (2, 16, 3), f"unexpected decoded shape {tuple(pred.shape)}"
-    assert contrastive == 0.0, "single-view step must carry a zero contrastive term"
+    # Post-T10 a term that can't contribute is ABSENT rather than reported as 0.0.
+    assert "contrastive" not in breakdown, "single-view step must carry no contrastive term"
 
 
 def test_training_step_updates_parameters():
@@ -96,7 +98,7 @@ def test_training_step_is_stable_over_multiple_steps():
     stepper = TrainingStepper(encoder, decoder, learning_rate=1e-3, device='cpu')
     batch = make_batch()
 
-    # train_step returns (pred, loss, recon, kl, contrastive); loss is index 1.
+    # train_step returns (pred, loss, breakdown); loss is index 1.
     losses = [stepper.train_step(*batch)[1] for _ in range(5)]
     assert all(math.isfinite(l) for l in losses), f"non-finite losses: {losses}"
 
@@ -105,18 +107,19 @@ def test_two_view_contrastive_step():
     """A six-tuple (two views) runs the contrastive path: finite loss, a positive
     contrastive term, and the weights still move."""
     encoder, decoder = make_models()
-    stepper = TrainingStepper(encoder, decoder, learning_rate=1e-2,
-                              contrastive_weight=0.1, device='cpu')
+    stepper = TrainingStepper(
+        encoder, decoder, learning_rate=1e-2, device='cpu',
+        composer=LossComposer([LossTerm("recon", 1.0), LossTerm("contrastive", 0.1)]))
     graph, super_graph, true_verts, mask = make_batch()
 
     before = decoder.fold2.weight.detach().clone()
-    pred, loss, recon, kl, contrastive = stepper.train_step(
+    pred, loss, breakdown = stepper.train_step(
         graph, super_graph, true_verts, mask, graph, super_graph)
     after = decoder.fold2.weight.detach()
 
     assert math.isfinite(loss), f"bad loss: {loss}"
     assert pred.shape == (2, 16, 3), f"unexpected decoded shape {tuple(pred.shape)}"
-    assert contrastive > 0.0, "two-view step should carry a positive contrastive term"
+    assert breakdown["contrastive"] > 0.0, "two-view step should carry a positive contrastive term"
     assert not torch.allclose(before, after), "optimizer did not update decoder params"
 
 
@@ -129,8 +132,8 @@ class _RecordingStepper:
 
     def train_step(self, *batch):
         self.calls += 1
-        # (pred, loss, recon, kl, contrastive) -- the arity the orchestrator unpacks.
-        return None, 0.5, 0.4, 0.0, 0.0
+        # (pred, loss, breakdown) -- the arity the orchestrator unpacks post-T10.
+        return None, 0.5, {"recon": 0.4}
 
 
 class _RecordingLogger:
