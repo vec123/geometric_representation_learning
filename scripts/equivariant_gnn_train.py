@@ -72,10 +72,10 @@ BATCH_SIZE       = 5
 # together (this needs resampling, so it selects the two-view loader below). False ->
 # ordinary single-view reconstruction only.
 CONTRASTIVE            = False
-CONTRASTIVE_WEIGHT     = 0.1   # weight of the alignment loss; raise if views don't align, lower if recon stalls
+CONTRASTIVE_WEIGHT     = 1   # weight of the alignment loss; raise if views don't align, lower if recon stalls
 CONTRASTIVE_VAR_WEIGHT = 1.0   # variance-hinge weight (anti-collapse); set 0 for pure alignment
 
-KL_WEIGHT = 0.01
+KL_WEIGHT = 0.1
 LATENT_DIM     = 5
 NUM_SAMPLES    = 256           # decoder output points (perfect square for the folding grid)
 LEARNING_RATE  = 1e-3
@@ -161,7 +161,7 @@ def main():
    
     layer_cfg = {
         "input_irreps": '1x0e + 1x1o',
-        "intermediate_irreps": "32x0e + 16x1o + 4x2o",
+        "intermediate_irreps": "32x0e + 16x1o",
        #  "output_irreps": f"{LATENT_DIM}x0e + 2x1o",   # latent_dim scalars + 2 vectors (rotation frame)
          "output_irreps": f"{LATENT_DIM}x0e + 2x1o"
     }

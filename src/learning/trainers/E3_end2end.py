@@ -31,7 +31,7 @@ class TrainingStepper:
     validation and non-contrastive training are unchanged.
     """
 
-    def __init__(self, encoder, decoder, learning_rate=1e-5, kl_weight=0.0,
+    def __init__(self, encoder, decoder, learning_rate=1e-3, kl_weight=0.1,
                  contrastive_weight=0.0, contrastive_var_weight=1.0,
                  device=None, verbose=False):
         self.device = _resolve_device(device)

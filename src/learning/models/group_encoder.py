@@ -43,12 +43,7 @@ class GroupEncoder(nn.Module):
                         target_irreps=self.intermediate_irreps_str,
                         spatial_sh_lmax = sh_lmax,
                         interaction_sh_lmax = 4,
-                        verbose=verbose),
-            EquiLayer(in_irreps=self.intermediate_irreps_str,
-                       target_irreps=self.intermediate_irreps_str,
-                        spatial_sh_lmax = sh_lmax,
-                        interaction_sh_lmax = 4, 
-                       verbose=verbose)
+                        verbose=verbose)
         ])
         
          # Optional supernode aggregation: an equivariant bipartite conv maps the
