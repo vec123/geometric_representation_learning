@@ -65,9 +65,14 @@ Registry.register("graph_builder", "radius",
 Registry.register("graph_builder", "knn",
                    "src.learning.data.builders:KNNGraphBuilder")
 
+Registry.register("latent_head", "gaussian",
+                   "src.learning.models.latent_heads:GaussianLatentHead")
+Registry.register("latent_head", "deterministic",
+                   "src.learning.models.latent_heads:DeterministicLatentHead")
+
 Registry.register("readout", "attention",
                    "src.learning.modules.transformers.perceiver_encoder:PerceiverReducer")
-# readout="mean" has no class of its own -- GroupEncoder.forward computes it inline
-# as a weighted global_add_pool (group_encoder.py:196-199), not through a component.
+# readout="mean" has no class of its own -- the LatentHead base computes it inline
+# as a weighted global_add_pool (latent_heads.py:_reduce), not through a component.
 # Nothing to register until that path is extracted into a Strategy class of its own.
 

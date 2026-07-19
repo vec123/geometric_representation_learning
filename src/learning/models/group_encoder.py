@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import torch
 import torch.nn as nn
 from torch_geometric.nn import global_mean_pool, global_add_pool
@@ -10,7 +12,9 @@ from src.learning.modules.equivariant.interaction import (
 from src.learning.modules.equivariant.transformer import build_equivariant_transformer
 from src.learning.modules.equivariant.irreps_utils import scalar_features, vector_features
 from src.learning.models.encoder_output import EncoderOutput
-from src.learning.modules.transformers.perceiver_encoder import PerceiverReducer
+# The registry stores "module:QualName" STRINGS and imports on first use (T6), so
+# this import pulls in no components and cannot cycle back into this module.
+from src.learning.registry import Registry
 
 class GroupEncoder(nn.Module):
     def __init__(self, layers_cfg,
@@ -22,6 +26,7 @@ class GroupEncoder(nn.Module):
                  transformer_type: str = "se3",
                  transformer_cfg: dict = None,
                  area_pool: bool = False,
+                 latent_mode: str = "gaussian",
                  verbose: bool = False):
         """``layers_cfg``: a non-empty list of per-layer dicts, one EquiLayer each,
         threaded in order (layer i's output feeds layer i+1's input):
@@ -32,6 +37,10 @@ class GroupEncoder(nn.Module):
         ``spatial_sh_lmax`` has no default here on purpose -- every layer's caller
         must state it explicitly rather than silently inherit an encoder-wide
         value, since different layers legitimately want different lmax.
+
+        ``latent_mode`` selects the LatentHead strategy (T9) from the registry:
+        ``"gaussian"`` (VAE: mu/logvar) or ``"deterministic"`` (auto-encoder: a
+        plain latent). Both emit [B, latent_dim], so nothing downstream branches.
         """
 
         super().__init__()
@@ -95,22 +104,23 @@ class GroupEncoder(nn.Module):
         self.out_irreps = o3.Irreps(self.output_irreps_str)
         self.final_linear = o3.Linear(self.intermediate_irreps_str, self.output_irreps_str)
          
-        # Pool readout: one learned query cross-attends to all node scalars,
-        # collapsing them to a single [latent_dim] token per graph (PerceiverReducer
-        # with stages=[1]). The scalar width is latent_dim, so d_shared = latent_dim.
-        # The mean-pool path below is kept for ablation (readout="mean").
-        self.readout_pool = None
-        if readout == "attention":
-            self.readout_pool = PerceiverReducer(
-                d_shared=latent_dim, stages=[1],
-                num_heads=readout_heads, self_attend=False,
-            )
-        elif readout != "mean":
-            raise ValueError(f"readout must be 'attention' or 'mean', got {readout!r}")
+        # Latent head (T9 Strategy): owns the readout AND the distribution the
+        # pooled scalars parameterize. Resolved through the lazy Registry, so
+        # adding a third mode is a registration line, not an edit here.
+        #
+        # Constructed HERE, between final_linear and weight_net, and internally in
+        # the order readout_pool -> mu_net -> var_net: exactly where those modules
+        # used to be built. nn.Linear draws from the global RNG at construction,
+        # so moving this call would change every seeded init and break the T2
+        # characterization baseline.
+        self.latent_mode = latent_mode
+        self.latent_head = Registry.create(
+            "latent_head", latent_mode,
+            latent_dim=latent_dim, readout=readout, readout_heads=readout_heads,
+        )
 
-        # MLP Heads (shared by both readouts + the pose head)
-        self.mu_net = nn.Linear(latent_dim, latent_dim)
-        self.var_net = nn.Sequential(nn.Linear(latent_dim, latent_dim), nn.Softplus())
+        # Per-token attention logits. Stays on the encoder (NOT the head) because
+        # the pose head below shares the same weights -- see forward.
         self.weight_net = nn.Linear(latent_dim, 1)
 
         self.mu_bn = nn.BatchNorm1d(latent_dim)
@@ -211,31 +221,10 @@ class GroupEncoder(nn.Module):
             logit = logit + torch.log(pool_area.clamp_min(1e-12))
         weights = scatter_softmax(logit, pool_batch)                     # [n_pool, 1]
 
-        if self.readout == "attention":
-            # Attention-pool: collapse each graph's tokens to one, then project to
-            # mu/logvar. Per-graph (batch dim 1) so tokens only attend within a shape.
-            pooled = []
-            for b in range(num_graphs):
-                toks = scalars[pool_batch == b].unsqueeze(0)        # [1, n_b, latent_dim]
-                pooled.append(self.readout_pool(toks))              # [1, 1, latent_dim]
-            pooled = torch.cat(pooled, dim=0).squeeze(1)            # [B, latent_dim]
-            mu = self.mu_net(pooled)
-            logvar = torch.log(self.var_net(pooled) + 1e-8)
-        else:
-            # Weighted sum (weights already sum to 1 per shape -> single normalization).
-            mu = global_add_pool(weights * self.mu_net(scalars), pool_batch, size=num_graphs)
-            logvar = torch.log(global_add_pool(weights * self.var_net(scalars), pool_batch, size=num_graphs) + 1e-8)
-
-        #Optional: Batch and/or Layer Norm
-        #mu = mu.unsqueeze(1)
-        #logvar = logvar.unsqueeze(1)
-        #mu = self.mu_ln(mu)
-
-        #print("mu.shape: ", mu.shape)
-        #mu = mu.squeeze(1)
-        #mu = self.mu_bn(mu)
-        #mu = mu.unsqueeze(1)
-        #print("mu.shape: ", mu.shape)
+        # Latent head (T9): the readout AND the distribution live here. Returns an
+        # EncoderOutput carrying only the latent fields -- gaussian -> mu/logvar,
+        # deterministic -> latent -- which the pose fields are added to below.
+        latent_out = self.latent_head(scalars, weights, pool_batch, num_graphs)
 
         # Equivariant Output (Rotation & Translation)
         vectors = vector_features(feat, self.out_irreps, '1o')    #[n_nodes, n_vec, 3]
@@ -259,11 +248,9 @@ class GroupEncoder(nn.Module):
         else:
             transl = global_mean_pool(pool_pos, pool_batch, size=num_graphs)
         
-        #return (mu, logvar), rot_matrix, vec_graph, transl
-        return EncoderOutput( mu=mu, 
-                             logvar=logvar, 
-                             rotation=rot_matrix, 
-                             translation=transl)
+        # Attach the pose to whatever latent fields the head produced, without this
+        # method needing to know which kind of head it holds.
+        return replace(latent_out, rotation=rot_matrix, translation=transl)
     
 
     def get_rotation_matrix_from_two_vectors(self, v1, v2):

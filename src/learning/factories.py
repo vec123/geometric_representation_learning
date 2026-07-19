@@ -23,12 +23,10 @@ def build_encoder(cfg):
 
     Matched against GroupEncoder's real constructor (group_encoder.py:16-25) --
     every field is accounted for, including ``area_pool`` (the deleted T0 factory
-    dropped it) and, since T7's multi-layer update, ``spatial_sh_lmax`` /
-    ``interaction_sh_lmax`` per layer (previously the latter was hardcoded inside
-    GroupEncoder and had no effect no matter what config said).
-
-    ``cfg.latent_mode`` is NOT forwarded: GroupEncoder always builds a Gaussian
-    head today; wiring latent_mode through is T9's job (the LatentHead strategy).
+    dropped it), ``spatial_sh_lmax`` / ``interaction_sh_lmax`` per layer (T7's
+    multi-layer update; the latter used to be hardcoded inside GroupEncoder and
+    had no effect no matter what config said), and ``latent_mode`` (T9's
+    LatentHead strategy: "gaussian" | "deterministic").
     """
     layers_cfg = [
         {
@@ -50,13 +48,13 @@ def build_encoder(cfg):
         transformer_type=cfg.transformer_type,
         transformer_cfg=cfg.transformer_cfg,
         area_pool=cfg.area_pool,
+        latent_mode=cfg.latent_mode,
         verbose=cfg.verbose,
     )
 
 
 def build_decoder(cfg):
     """DecoderConfig -> decoder module.
-
     Matched against FoldingDecoder / SphereFoldingDecoder's shared constructor
     shape (folding_decoder.py).
     """
@@ -70,14 +68,8 @@ def build_decoder(cfg):
 
 
 def build_from_config(cfg):
-    """ExperimentConfig -> (encoder, decoder). Validates the pairing before returning.
-
-    ``ExperimentConfig.validate()`` (config/config_fields.py) already checks
-    ``encoder.n_tokens`` vs ``decoder.expects_tokens`` at the CONFIG level, before
-    anything is built. This re-checks the same invariant on the CONSTRUCTED
-    objects -- the ground truth -- so build_from_config is safe to call even if
-    validate() was skipped, and so a future encoder/decoder whose real token
-    count diverges from its config-level property still gets caught here.
+    """ExperimentConfig -> (encoder, decoder). 
+    (Re-) Validates the pairing before returning.
     """
     encoder = build_encoder(cfg.encoder)
     decoder = build_decoder(cfg.decoder)
