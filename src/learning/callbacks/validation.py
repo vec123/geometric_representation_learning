@@ -1,8 +1,9 @@
-"""Validation-running callback (INSTRUCTIONS.md T12).
+"""
+Validation-running callback.
 
-This is the one callback that EMITS events as well as consuming them: it runs the
-validation pass, then broadcasts ``on_validation_end`` to every callback on the
-context. That keeps the orchestrator out of the validation business entirely --
+This is the one callback that EMITS events as well as consuming them: 
+runs the validation pass, then broadcasts ``on_validation_end`` to every callback on the
+context. Keeps the orchestrator out of the validation business entirely --
 it doesn't know a validation set exists -- while MetricsRecorder, MetricsPlotter
 and GeometryVisualizer all react to validation exactly as they react to a step.
 """

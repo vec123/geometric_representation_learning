@@ -6,13 +6,12 @@ pooled invariant scalars -> the latent an ``EncoderOutput`` carries.
 ``DeterministicLatentHead`` is the auto-encoder sibling (a plain latent). 
 Both emit ``[B, latent_dim]``, 
 the decoder contract is unaffected and ``latent_mode`` is a simple switch --
-``EncoderOutput.sample()`` already returns ``latent`` when ``mu is None``, and
-``EncoderOutput.kl()`` already returns ``None`` there, so nothing downstream branches.
 
 The base class owns the readout ("mean" | "attention"), which is ORTHOGONAL to the
-distribution: readout decides HOW per-node scalars collapse to one token per shape,
-this subclass decides WHAT distribution that token parameterizes. Keeping the readout
-here is what stops 2 heads x 2 readouts becoming four copies of the same pooling.
+distribution: readout decides HOW per-node scalars collapse to one token per shape (i.e. graph),
+The subclass decides WHAT distribution that token parameterizes. 
+Keeping the readout here is what stops 2 heads x 2 readouts becoming four 
+copies of the same pooling.
 """
 
 from abc import ABC, abstractmethod
@@ -55,8 +54,8 @@ class LatentHead(nn.Module, ABC):
             raise ValueError(f"readout must be 'attention' or 'mean', got {readout!r}")
 
     def _attention_pooled(self, scalars, batch, num_graphs):
-        """Collapse each shape's tokens to one, per-graph so tokens only attend
-        within a shape. Returns [B, latent_dim], or None on the mean path.
+        """Collapse each shape's tokens to one, per-graph. 
+        Returns [B, latent_dim], or None on the mean path.
 
         Computed ONCE per forward and shared by every net the subclass reduces,
         because this is a python loop over shapes -- calling it per-net (once for

@@ -1,0 +1,88 @@
+# Ablation: deterministic auto-encoder + Frobenius latent regularizer.
+#   diff configs/baseline.yaml configs/ablations/ae_frobenius.yaml
+#
+# Everything not restated here is inherited from the dataclass defaults, so this
+# file is deliberately NOT a copy of baseline.yaml -- it names only what changes
+# plus the shared settings the defaults don't already provide.
+name: ae_frobenius
+seed: 0
+output_dir: training_log_ae_frobenius
+
+encoder:
+  encoder_type: group_encoder
+  latent_dim: 5
+  layers:
+    - in_irreps: "1x0e + 1x1o"
+      target_irreps: "5x0e + 16x1o"
+      spatial_sh_lmax: 2
+      interaction_sh_lmax: 2
+  readout: mean
+  readout_heads: 1
+  supernode_sh_lmax: 2
+  transformer_type: equiformer
+  transformer_cfg:
+    num_layers: 2
+    num_heads: 2
+    num_channels: 8
+    lmax: 2
+  area_pool: true
+  # <-- CHANGE 1: no posterior. The encoder builds DeterministicLatentHead, so
+  # EncoderOutput.kl() returns None and the composer skips any kl term.
+  latent_mode: deterministic
+  verbose: false
+
+decoder:
+  decoder_type: sphere_folding
+  num_samples: 256
+  latent_dim: 5
+  n_freqs: 4
+  verbose: false
+
+training:
+  learning_rate: 0.001
+  num_steps: 2
+  log_every: 1
+  save_every: 100
+  val_every: 100
+  batch_size: 5
+  device: null
+  verbose: false
+  losses:
+    terms:
+      - name: recon
+        weight: 1.0
+      - name: frobenius
+        weight: 0.01
+
+data:
+  data_path: Dataset/Primitives/transitions
+  parts:
+    - box_to_ellipse_frames
+    - box_to_pyramid_frames
+    - box_to_sphere_frames
+   # - ellipse_to_box_frames
+   # - ellipse_to_pyramid_frames
+   # - ellipse_to_sphere_frames
+   # - pyramid_to_box_frames
+   # - pyramid_to_ellipse_frames
+   # - pyramid_to_sphere_frames
+   # - sphere_to_box_frames
+   # - sphere_to_ellipse_frames
+   # - sphere_to_pyramid_frames
+  load_fields: true
+  val_fraction: 0.2
+  shuffle: true
+  seed: 0
+  graph_builder: radius
+  resample_graph: true
+  graph_spec:
+    r_max: 0.22
+    r_supergraph: 0.5
+    dropout_rate: 0.5
+    n_supernodes: 15
+    use_supernodes: false
+    sampling_mode_graph: uniform
+    sampling_mode_supernodes: uniform
+    recompute_area: true
+    area_k: 8
+    noise_std: 0.0

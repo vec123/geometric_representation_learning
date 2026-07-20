@@ -11,9 +11,7 @@ from src.learning.modules.equivariant.interaction import (
 
 from src.learning.modules.equivariant.transformer import build_equivariant_transformer
 from src.learning.modules.equivariant.irreps_utils import scalar_features, vector_features
-from src.learning.models.encoder_output import EncoderOutput
-# The registry stores "module:QualName" STRINGS and imports on first use (T6), so
-# this import pulls in no components and cannot cycle back into this module.
+
 from src.learning.registry import Registry
 
 class GroupEncoder(nn.Module):
@@ -28,17 +26,18 @@ class GroupEncoder(nn.Module):
                  area_pool: bool = False,
                  latent_mode: str = "gaussian",
                  verbose: bool = False):
+        
         """``layers_cfg``: a non-empty list of per-layer dicts, one EquiLayer each,
         threaded in order (layer i's output feeds layer i+1's input):
 
             {"in_irreps": ..., "target_irreps": ..., "spatial_sh_lmax": ...,
              "interaction_sh_lmax": ...}   # interaction_sh_lmax optional, default 4
 
-        ``spatial_sh_lmax`` has no default here on purpose -- every layer's caller
-        must state it explicitly rather than silently inherit an encoder-wide
-        value, since different layers legitimately want different lmax.
+        ``spatial_sh_lmax`` -- every layer's caller
+        must state it explicitly, no default, no silent inherit of an encoder-wide
+        value
 
-        ``latent_mode`` selects the LatentHead strategy (T9) from the registry:
+        ``latent_mode`` selects the LatentHead strategy from the registry:
         ``"gaussian"`` (VAE: mu/logvar) or ``"deterministic"`` (auto-encoder: a
         plain latent). Both emit [B, latent_dim], so nothing downstream branches.
         """
@@ -104,14 +103,14 @@ class GroupEncoder(nn.Module):
         self.out_irreps = o3.Irreps(self.output_irreps_str)
         self.final_linear = o3.Linear(self.intermediate_irreps_str, self.output_irreps_str)
          
-        # Latent head (T9 Strategy): owns the readout AND the distribution the
-        # pooled scalars parameterize. Resolved through the lazy Registry, so
+        # Latent head: owns the readout AND the distribution the
+        # pooled scalars parameterize. Resolved through the lazy Registry, 
         # adding a third mode is a registration line, not an edit here.
         #
         # Constructed HERE, between final_linear and weight_net, and internally in
-        # the order readout_pool -> mu_net -> var_net: exactly where those modules
-        # used to be built. nn.Linear draws from the global RNG at construction,
-        # so moving this call would change every seeded init and break the T2
+        # the order readout_pool -> mu_net -> var_net: 
+        # nn.Linear draws from the global RNG at construction,
+        # moving this call would change every seeded init and break the
         # characterization baseline.
         self.latent_mode = latent_mode
         self.latent_head = Registry.create(
@@ -120,7 +119,7 @@ class GroupEncoder(nn.Module):
         )
 
         # Per-token attention logits. Stays on the encoder (NOT the head) because
-        # the pose head below shares the same weights -- see forward.
+        # the pose head below shares the same weights (might change in future) -- see forward.
         self.weight_net = nn.Linear(latent_dim, 1)
 
         self.mu_bn = nn.BatchNorm1d(latent_dim)
@@ -128,9 +127,8 @@ class GroupEncoder(nn.Module):
 
         # Both readouts ("mean" and "attention") collapse to one token per shape
         # (see forward, below). Exposed so a factory can check encoder/decoder
-        # compatibility on the constructed objects (INSTRUCTIONS.md T7 step 4).
+        # compatibility on the constructed objects, multi-token not yet supported.
         self.n_tokens = 1
-
 
 
     def forward(self,graph, supergraph, monte_carlo_reg = True):
@@ -221,7 +219,7 @@ class GroupEncoder(nn.Module):
             logit = logit + torch.log(pool_area.clamp_min(1e-12))
         weights = scatter_softmax(logit, pool_batch)                     # [n_pool, 1]
 
-        # Latent head (T9): the readout AND the distribution live here. Returns an
+        # Latent head: the readout AND the distribution live here. Returns an
         # EncoderOutput carrying only the latent fields -- gaussian -> mu/logvar,
         # deterministic -> latent -- which the pose fields are added to below.
         latent_out = self.latent_head(scalars, weights, pool_batch, num_graphs)

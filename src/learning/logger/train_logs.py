@@ -137,10 +137,14 @@ class TrainingLogger:
         if pred is not None:
             self.visualize_results(pred, step, subdir=subdir,  max_num = max_num)
 
-    def visualize_val_batch(self, batch, pred, step):
+    def visualize_val_batch(self, batch, pred, step, max_num=4):
         """Same as ``visualize_batch`` but writes to ``vtk/validation`` so the validation
-        reconstructions live alongside — not on top of — the training ones."""
-        self.visualize_batch(batch, pred, step, subdir=os.path.join("vtk", "validation"))
+        reconstructions live alongside — not on top of — the training ones.
+
+        ``max_num`` is forwarded so validation honours the same per-shape cap as
+        training; it used to be dropped here, silently pinning validation to 4."""
+        self.visualize_batch(batch, pred, step, subdir=os.path.join("vtk", "validation"),
+                             max_num=max_num)
 
     def _save_true_verts(self, true_verts, mask, step, max_num = 4, subdir = "vtk"):
         """Save the reconstruction target as a point cloud (no edges), one VTP per shape.

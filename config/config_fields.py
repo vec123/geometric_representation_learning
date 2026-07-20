@@ -1,15 +1,15 @@
 """Experiment configuration schema (INSTRUCTIONS.md T5).
 field-by-field against the constructors:
 GroupEncoder 
-(src/learning/models/group_encoder.py:16-25), 
+(src/learning/models/group_encoder.py), 
 EquiLayer
-(src/learning/layers/equivariant/Self_Spatial_layer.py:13-14), 
+(src/learning/layers/equivariant/Self_Spatial_layer.py), 
 FoldingDecoder /
 SphereFoldingDecoder 
 (src/learning/models/folding_decoder.py), 
 GraphSpec
 (src/learning/data/graph_spec.py),
-TrainingOrchestrator.run
+TrainingOrchestrator
 (src/learning/trainers/E3_end2end.py:159).
 
 Every constant has exactly one field here 
@@ -30,11 +30,10 @@ _LARGE_WEIGHT_THRESHOLD = 1.5
 
 @dataclass
 class EncoderLayerConfig:
-    """Mirrors EquiLayer's constructor (Self_Spatial_layer.py:13-14). One entry
-    per EquiLayer GroupEncoder builds -- ``EncoderConfig.layers`` is a LIST of
-    these, chained in order (T7: GroupEncoder now builds one EquiLayer per
-    entry, and ``spatial_sh_lmax`` / ``interaction_sh_lmax`` genuinely reach it;
-    neither is silently defaulted or dropped inside GroupEncoder anymore).
+    """Mirrors EquiLayer's constructor 
+     One entry per EquiLayer GroupEncoder builds -- 
+    ``EncoderConfig.layers`` is a LIST of these, chained in order
+    GroupEncoder builds one EquiLayer per entry
     """
     in_irreps: str = "1x0e"
     target_irreps: str = "32x0e + 32x0o + 16x1e + 16x1o"
@@ -44,14 +43,12 @@ class EncoderLayerConfig:
 
 @dataclass
 class EncoderConfig:
-    """Matches GroupEncoder's real constructor (group_encoder.py:16-25).
+    """Matches GroupEncoder's real constructor.
 
     ``layers`` is a non-empty list, chained in order: entry i's ``target_irreps``
-    must equal entry i+1's ``in_irreps`` (checked in ``__post_init__``, using
-    ``o3.Irreps`` equality rather than string equality so equivalent but
-    differently-formatted irreps strings still match).
+    must equal entry i+1's ``in_irreps`` (checked in ``__post_init__``)
     """
-    encoder_type: str = "group_encoder"   # registry key (T6); only one exists today
+    encoder_type: str = "group_encoder"   # registry key 
     latent_dim: int = 5
     layers: List[EncoderLayerConfig] = field(default_factory=lambda: [EncoderLayerConfig()])
     readout: str = "mean"          # "mean" | "attention"
@@ -60,8 +57,8 @@ class EncoderConfig:
     transformer_type: Optional[str] = "se3"   # "se3" | "equiformer" | None
     transformer_cfg: dict = field(default_factory=dict)
     area_pool: bool = False
-    latent_mode: str = "gaussian"  # "gaussian" | "deterministic" -- T9's LatentHead strategy
-    verbose: bool = False
+    latent_mode: str = "gaussian"  # "gaussian" | "deterministic"
+    verbose: bool = False 
 
     def __post_init__(self):
         if not self.layers:
@@ -79,17 +76,15 @@ class EncoderConfig:
     def output_irreps(self) -> str:
         """Not a free choice: GroupEncoder.forward asserts exactly ``latent_dim``
         scalars (0e) and 2 vectors (1o) come out of the final projection
-        (group_encoder.py:169, 215). Computing it here removes an entire class of
-        invalid config (an output_irreps that disagrees with latent_dim)."""
+        (group_encoder.py:169, 215)."""
         return f"{self.latent_dim}x0e + 2x1o"
 
     @property
     def n_tokens(self) -> int:
         """Tokens emitted per shape. GroupEncoder's readout ("mean" or "attention")
-        always collapses to exactly one token regardless of which is chosen -- this
-        schema doesn't yet model a multi-token encoder (e.g. GroupPerceiverEncoder,
-        scripts/perceiver_train.py). Give this a real encoder_type-aware value when
-        such an encoder joins the registry (T6, T9)."""
+        currently always collapses to exactly one token regardless of which is chosen 
+        This schema doesn't yet model a multi-token encoder.
+        Give this a real encoder_type-aware value when such an encoder joins the registry."""
         return 1
 
 
@@ -133,7 +128,7 @@ class TrainingConfig:
     TrainingOrchestrator.run is 
     ``run(num_steps, log_every, save_every, val_every)`` (E3_end2end.py:159).
     """
-    learning_rate: float = 1e-3   # v1 had 1e-5; equivariant_gnn_train.py uses 1e-3
+    learning_rate: float = 1e-3   
     device: Optional[str] = None  # "cuda" | "cpu" | None (auto -- TrainingStepper._resolve_device)
     losses: LossConfig = field(default_factory=LossConfig)
     verbose: bool = False
@@ -202,13 +197,10 @@ class GraphSpec:
 @dataclass
 class DataConfig:
     """Dataset loading + graph-construction policy.
-
-    Graph-construction knobs are NOT re-listed here: they live on ``GraphSpec``
-    above (T3) and are embedded as one field. v1 also had ``use_supernodes`` here
-    (duplicating a concern EncoderConfig implied too); it now has exactly one
-    home, on ``GraphSpec``.
+    Graph-construction knobs live on ``GraphSpec``
     """
     data_path: str = "DATA_ROOT"
+    # names of subdirectories
     parts: Optional[List[str]] = field(default_factory=lambda: ["mouth", "nose"])
     load_fields: bool = True
     val_fraction: float = 0.2
@@ -229,6 +221,9 @@ class ExperimentConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: DataConfig = field(default_factory=DataConfig)
     seed: Optional[int] = None
+    # Where the run writes its artifacts. Relative paths resolve against the repo
+    # root, so a config is portable between machines.
+    output_dir: str = "training_logs"
 
     def validate(self) -> None:
         """Fail fast, at the boundary, before anything expensive gets built."""
@@ -237,8 +232,8 @@ class ExperimentConfig:
         unknown_terms = set(term_names) - VALID_LOSS_TERMS
         if unknown_terms:
             raise ValueError(
-                f"unknown loss term(s) {sorted(unknown_terms)}; the trainer only "
-                f"ever produces {sorted(VALID_LOSS_TERMS)}"
+                f"unknown loss term(s) {sorted(unknown_terms)};"
+                f"only {sorted(VALID_LOSS_TERMS)} are valid"
             )
 
         if self.encoder.latent_mode == "deterministic" and "kl" in term_names:
@@ -269,7 +264,7 @@ class ExperimentConfig:
                 f"encoder.encoder_type={self.encoder.encoder_type!r} emits "
                 f"{self.encoder.n_tokens} token(s) per shape but "
                 f"decoder.decoder_type={self.decoder.decoder_type!r} expects "
-                f"{self.decoder.expects_tokens} (see T7's build-time compatibility check)."
+                f"{self.decoder.expects_tokens}."
             )
 
         frobenius_w = next((t.weight for t in self.training.losses.terms if t.name == "frobenius"), 0.0)

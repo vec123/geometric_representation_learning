@@ -15,13 +15,13 @@ class ResamplingGraphLoader:
     """Rebuilds the encoder graph from raw geometry each step with a fresh rng.
 
     Graph construction is delegated to a ``GraphBuilder`` strategy
-    (src/learning/data/builders.py, INSTRUCTIONS.md T4): the loader calls
+    (src/learning/data/builders.py): the loader calls
     ``builder.build(verts, mask, rng, areas=..., normals=...)`` and knows nothing
     about radii, dropout, or supernodes -- that policy lives on the ``GraphSpec``
     the builder was constructed with. Swapping radius-graph for kNN construction is
     now "pass a different ``GraphBuilder``", not a change to this class.
 
-    ``vertices`` / ``mask`` / ``areas`` / ``normals`` stay as direct arguments: they are
+    ``vertices`` / ``mask`` / ``areas`` / ``normals`` are direct arguments: they are
     the loader's fixed per-shape geometry (parallel arrays, indexed identically), not a
     construction choice, so they don't belong on the builder/spec.
 

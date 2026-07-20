@@ -1,8 +1,5 @@
-"""Metric recording and plotting callbacks (INSTRUCTIONS.md T12).
-
-Two of the five responsibilities ``TrainingLogger`` used to bundle, split apart so
-the metrics format can change without touching the code that draws curves -- or
-the code that writes 3D geometry.
+"""
+Metric recording and plotting callbacks (INSTRUCTIONS.md T12).
 """
 
 import json
@@ -19,14 +16,10 @@ class MetricsRecorder(Callback):
     """Persists every metric event, and keeps the history for whoever plots it.
 
     Writes APPEND-ONLY JSONL -- one ``{"step", "split", "term", "value"}`` record
-    per event. This fixes E1: the old ``TrainingLogger.log_metrics`` re-serialized
-    the ENTIRE growing history to JSON on every call, so a 3001-step run at
-    LOG_EVERY=1 did 3001 full rewrites -- quadratic work for what should be an
-    append. Appending is constant-time, survives a crash mid-run (every line is
-    flushed), and is trivially loadable for cross-run comparison in T13.
+    per event.
 
-    ``metrics.json`` is still written, but ONCE at ``on_train_end`` as a summary
-    in the pre-T12 ``{"train/recon": [[step, value], ...]}`` shape. The JSONL is
+    ``metrics.json`` is  written ONCE at ``on_train_end`` as a summary
+    in  ``{"train/recon": [[step, value], ...]}`` shape. The JSONL is
     the durable stream; the JSON is the convenient end-of-run artifact.
     """
 

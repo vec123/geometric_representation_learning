@@ -18,10 +18,11 @@ def _resolve_device(device):
 
 
 class TrainingStepper:
-    """Runs a single optimization step: encode -> reparameterize -> decode -> loss.
+    """Runs a single optimization step:
+    encode -> reparameterize -> decode -> loss.
 
-    Encoder and decoder are injected, so swapping model variants (equivariant vs
-    not, supernodes vs full, different decoders) needs no change to this class.
+    Encoder and decoder are injected, so swapping model variants 
+    (equivariant vs not, supernodes vs full, different decoders) needs no change to this class.
 
     Contrastive objective ("same shape, different vertex sampling -> same encoding") is
     OPTIONAL and driven by the batch shape: hand ``train_step`` a SIX-tuple
@@ -31,7 +32,7 @@ class TrainingStepper:
     ordinary single-view step, where that term is simply absent.
 
     Which terms actually count, and at what weight, is the ``composer``'s business
-    (T8/T10) -- this class computes every value it can and sums nothing itself.
+    -- this class computes every value it can and sums nothing itself.
     """
 
     def __init__(self, encoder, decoder, learning_rate=1e-3, composer=None,
@@ -39,10 +40,9 @@ class TrainingStepper:
         self.device = _resolve_device(device)
         self.encoder = encoder.to(self.device)
         self.decoder = decoder.to(self.device)
-        # Loss POLICY is data now (T8/T10): which terms, their weights, and any
-        # per-term kwargs all live on the composer. The default is reconstruction
-        # alone -- deliberately NOT a hidden kl_weight=0.1 as before, so a run that
-        # never mentions KL never silently pays for it.
+        # Loss POLICY: which terms, their weights, and any
+        # per-term kwargs all live on the composer. 
+        # The default is reconstruction alon
         self.composer = composer if composer is not None else LossComposer([LossTerm("recon", 1.0)])
         self.verbose = verbose
         self.optimizer = optim.Adam(
@@ -62,7 +62,7 @@ class TrainingStepper:
         Returns ``(pred, recon_loss, enc)``. The whole ``EncoderOutput`` comes back
         so the caller can ask it for whatever the configured terms need, without
         this method knowing which terms exist -- or which KIND of encoder ran.
-        Does NOT touch the optimizer; the caller composes the total and decides
+        Does NOT touch the optimizer; the caller COMPOSES the total loss and decides
         whether to backprop."""
         graph = graph.to(self.device)
         super_graph = super_graph.to(self.device) if super_graph is not None else None
@@ -93,12 +93,13 @@ class TrainingStepper:
 
         Every term this trainer CAN produce is built here; the composer drops the
         ones a run didn't configure, and ``None`` means "not available in this
-        mode" -- ``kl`` without a posterior (auto-encoder), ``contrastive``
-        outside a two-view step. That is what replaces the old ``if weight:``
-        chain, and what lets latent_mode be a pure config switch.
+        mode" -- examples:
+        ``kl`` without a posterior (auto-encoder), 
+        ``contrastive`` outside a two-view step. 
+        latent_mode becomes a pure config switch.
 
-        The latents used by ``contrastive``/``frobenius`` are always the
-        DETERMINISTIC encoding: those terms describe where a shape lands in
+        The latents used by ``contrastive``/``frobenius`` are always
+        DETERMINISTIC encodings: those terms describe where a shape lands in
         latent space, which shouldn't jitter with the reparameterization noise
         that only the decoder path wants.
         """
@@ -163,12 +164,11 @@ class TrainingStepper:
     def eval_step(self, graph, super_graph, true_verts, padding_mask):
         """Validation forward pass: single-view recon, no optimizer update.
         Returns ``(pred, loss, breakdown)`` -- the SAME shape as ``train_step``,
-        which is what lets T11 log ``val/<term>`` against ``train/<term>``.
+        which is what enables logging ``val/<term>`` against ``train/<term>``.
 
-        ``deterministic=True`` is an INTENTIONAL behavior change (T10 step 2):
+        ``deterministic=True`` is an INTENTIONAL behavior change:
         validation used to reparameterize with fresh random noise under no_grad,
         so identical weights on identical data scored differently run to run.
-        Expect VAE validation curves to shift slightly versus pre-T10 runs.
         Set ``encoder``/``decoder`` to eval mode around this (the orchestrator does)."""
         pred, recon, enc = self._encode_decode(
             graph, super_graph, true_verts, padding_mask, deterministic=True)
@@ -182,9 +182,9 @@ class TrainingOrchestrator:
     The dataloader yields ``(graph, super_graph, true_verts, padding_mask)`` batches,
     which are forwarded to ``stepper.train_step(*batch)``.
 
-    Everything that used to happen *around* the step -- logging, plotting,
-    checkpointing, VTP export, validation -- is now a ``Callback`` (T12), each with
-    its own cadence. This class is mechanism; the callbacks are policy.
+    Everything that happens *around* the step -- logging, plotting,
+    checkpointing, VTP export, validation -- is a ``Callback``, each with
+    its own cadence. 
     """
 
     def __init__(self, stepper, dataloader, callbacks=(), log_dir="logs"):
@@ -196,9 +196,7 @@ class TrainingOrchestrator:
     def run(self, num_steps):
         """Get a batch, take a step, fire the hooks. Nothing else lives here.
 
-        Cadence is no longer this method's business -- there is no log_every /
-        save_every / val_every, because each callback owns its own
-        ``every_n_steps``. Adding early stopping, an LR schedule, or a new
+         Adding early stopping, an LR schedule, or a new
         artifact means adding a callback, not editing this loop.
         """
         ctx = TrainingContext(stepper=self.stepper, log_dir=self.log_dir,

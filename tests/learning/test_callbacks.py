@@ -170,7 +170,23 @@ def test_checkpoint_writer_honors_its_own_cadence():
 
         written = sorted(os.listdir(os.path.join(tmp, "checkpoints")))
 
-    assert written == ["step_0.pt", "step_2.pt", "step_4.pt"], written
+    # final.pt is written unconditionally on train end, alongside the cadence saves.
+    assert written == ["final.pt", "step_0.pt", "step_2.pt", "step_4.pt"], written
+
+
+def test_checkpoint_writer_always_saves_final_weights():
+    """Cadence alone loses the trained weights whenever a run ends off-cadence --
+    here the last step is 4, which never hits every_n_steps=10."""
+    with tempfile.TemporaryDirectory() as tmp:
+        TrainingOrchestrator(
+            stepper=_FakeStepper(), dataloader=_Loader(),
+            callbacks=[CheckpointWriter(every_n_steps=10, verbose=False)],
+            log_dir=tmp).run(num_steps=5)
+
+        path = os.path.join(tmp, "checkpoints", "final.pt")
+        assert os.path.exists(path), "final weights were not saved"
+        import torch
+        assert torch.load(path)["step"] == 4, "final.pt should record the last step"
 
 
 # --------------------------------------------------------------------------- #

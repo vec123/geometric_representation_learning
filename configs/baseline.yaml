@@ -1,0 +1,96 @@
+# Baseline: reproduces scripts/equivariant_gnn_train.py.
+#
+# Every value here was read off that script's module-level constants; anything not
+# listed keeps its dataclass default (config/config_fields.py).
+name: equivariant_gnn_baseline
+seed: 0
+output_dir: training_log_equiv_embedd
+
+encoder:
+  encoder_type: group_encoder
+  latent_dim: 5
+  # One EquiLayer, as the script built. `layers` is a list, so a deeper stack is
+  # just more entries -- each one's target_irreps must equal the next's in_irreps.
+  layers:
+    - in_irreps: "1x0e + 1x1o"
+      target_irreps: "32x0e + 16x1o"
+      spatial_sh_lmax: 2
+      interaction_sh_lmax: 4
+  readout: mean
+  readout_heads: 1
+  supernode_sh_lmax: 2
+  transformer_type: equiformer
+  transformer_cfg:
+    num_layers: 2
+    num_heads: 2
+    num_channels: 8
+    lmax: 2
+  area_pool: true
+  latent_mode: gaussian      # VAE; see configs/ablations/ae_frobenius.yaml for the AE arm
+
+decoder:
+  decoder_type: sphere_folding
+  num_samples: 256
+  latent_dim: 5
+  n_freqs: 4
+  verbose: false
+
+training:
+  learning_rate: 0.001
+  num_steps: 3001
+  log_every: 1
+  save_every: 100
+  val_every: 100
+  batch_size: 5
+  device: null               # null -> auto (cuda when available)
+  verbose: false
+  losses:
+    terms:
+      - name: recon
+        weight: 1.0
+      - name: kl
+        weight: 0.1
+    # The script's CONTRASTIVE=False is expressed by simply omitting the term.
+    # Adding it back also switches the loader to two-view -- the runner derives
+    # that from this list, so the two can't disagree:
+    #   - name: contrastive
+    #     weight: 1.0
+    #     kwargs: {var_weight: 1.0}
+
+data:
+  data_path: Dataset/Primitives/transitions
+  parts:
+    - box_to_ellipse_frames
+    - box_to_pyramid_frames
+    - box_to_sphere_frames
+    - ellipse_to_box_frames
+    - ellipse_to_pyramid_frames
+    - ellipse_to_sphere_frames
+    - pyramid_to_box_frames
+    - pyramid_to_ellipse_frames
+    - pyramid_to_sphere_frames
+    - sphere_to_box_frames
+    - sphere_to_ellipse_frames
+    - sphere_to_pyramid_frames
+  load_fields: true
+  val_fraction: 0.2
+  shuffle: true
+  seed: 0
+  graph_builder: radius
+  resample_graph: true
+  graph_spec:
+    r_max: 0.22              # may also be a range, e.g. [0.2, 0.3], sampled per step
+    r_supergraph: 0.5
+    dropout_rate: 0.5
+    n_supernodes: 15
+    # NOTE: the script set USE_SUPERNODES=True at the top, but its resampling
+    # loader branch never forwarded that flag (only the contrastive branch did),
+    # so supernodes were effectively OFF for this configuration. `false` here
+    # reproduces what the script actually ran, not what its constant implied.
+    # Set true to enable supernode aggregation for real.
+    use_supernodes: false
+    sampling_mode_graph: uniform
+    sampling_mode_supernodes: uniform
+    recompute_area: true
+    area_k: 8
+    noise_std: 0.0

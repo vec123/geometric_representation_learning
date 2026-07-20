@@ -1,4 +1,4 @@
-"""Lazy component Registry (INSTRUCTIONS.md T6).
+"""Lazy component Registry.
 
 Maps ``(category, name)`` 
 -> a ``"module.path:ClassName"`` STRING, resolved
@@ -52,6 +52,7 @@ Registry.register("encoder", "group_encoder",
 
 Registry.register("decoder", "folding",
                    "src.learning.models.folding_decoder:FoldingDecoder")
+
 Registry.register("decoder", "sphere_folding",
                    "src.learning.models.folding_decoder:SphereFoldingDecoder")
 

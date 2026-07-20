@@ -1,11 +1,6 @@
-"""Early-stopping callback (INSTRUCTIONS.md T12).
+"""
+Early-stopping callback.
 
-This class is the PROOF that the Observer split actually worked: it adds a whole
-new training behavior -- watching a metric, tracking patience, ending the run --
-and it required zero edits to TrainingOrchestrator, TrainingStepper, or any other
-callback. It only needed two things that already existed: the events, and
-``ctx.stop()``. If writing this had required touching the loop, the abstraction
-would have been unfinished.
 """
 
 from src.learning.callbacks.base import Callback

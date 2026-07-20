@@ -1,4 +1,4 @@
-"""Geometry-export callback (INSTRUCTIONS.md T12).
+"""Geometry-export callback.
 
 Unlike the other four callbacks, this one DELEGATES rather than reimplements: VTP
 rendering is ~150 lines of geometry/field-marshalling code in ``TrainingLogger``
@@ -42,4 +42,4 @@ class GeometryVisualizer(Callback):
     def on_validation_end(self, ctx, step, metrics, batch, pred):
         if batch is None or pred is None:
             return
-        self._get_renderer(ctx).visualize_val_batch(batch, pred, step)
+        self._get_renderer(ctx).visualize_val_batch(batch, pred, step, max_num=self.max_num)

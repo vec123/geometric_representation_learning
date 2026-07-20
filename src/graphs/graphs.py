@@ -132,7 +132,7 @@ def build_super_graph(vertices, mask, full_graph, num_samples=50, r_max=0.2, mod
     return super_graph
     
 def build_radius_graph(nodes, batch_vec, r_max=0.4, max_num_neighbors=256):
-    """Stage 3: Compute graph structure from node positions.
+    """Compute graph structure from node positions.
 
     ``max_num_neighbors`` caps the degree per node: any node with more than this
     many neighbours within ``r_max`` gets its edge list SILENTLY TRUNCATED, so the

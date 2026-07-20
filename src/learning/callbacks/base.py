@@ -1,7 +1,7 @@
-"""Callback base + run context (INSTRUCTIONS.md T12).
+"""Callback base + run context.
 
 Observer / Inversion of Control: the training loop emits events; interested
-parties subscribe. The loop stops deciding WHAT happens at step N and only
+parties subscribe. The loop does not deciding WHAT happens at step N and only
 decides WHEN -- mechanism stays in the orchestrator, policy moves out here.
 """
 
