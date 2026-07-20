@@ -267,6 +267,12 @@ class ExperimentConfig:
                 f"{self.decoder.expects_tokens}."
             )
 
+        if self.encoder.latent_dim != self.decoder.latent_dim:
+            raise ValueError(
+                f"encoder.latent_dim ({self.encoder.latent_dim}) must equal "
+                f"decoder.latent_dim ({self.decoder.latent_dim})."
+            )
+
         frobenius_w = next((t.weight for t in self.training.losses.terms if t.name == "frobenius"), 0.0)
         contrastive_w = next((t.weight for t in self.training.losses.terms if t.name == "contrastive"), 0.0)
         if frobenius_w > _LARGE_WEIGHT_THRESHOLD and contrastive_w > _LARGE_WEIGHT_THRESHOLD:
