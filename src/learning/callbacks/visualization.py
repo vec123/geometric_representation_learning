@@ -23,10 +23,11 @@ class GeometryVisualizer(Callback):
     training VTPs written at the same step number.
     """
 
-    def __init__(self, every_n_steps=100, max_num=4, renderer=None):
+    def __init__(self, every_n_steps=100, max_num=4, renderer=None, val_viz_random=False):
         super().__init__(every_n_steps)
         self.max_num = max_num
         self._renderer = renderer
+        self.val_viz_random = val_viz_random
 
     def _get_renderer(self, ctx):
         # Built lazily from ctx so log_dir has exactly one source of truth.
@@ -42,4 +43,5 @@ class GeometryVisualizer(Callback):
     def on_validation_end(self, ctx, step, metrics, batch, pred):
         if batch is None or pred is None:
             return
-        self._get_renderer(ctx).visualize_val_batch(batch, pred, step, max_num=self.max_num)
+        self._get_renderer(ctx).visualize_val_batch(batch, pred, step, max_num=self.max_num,
+                                                     random_sample=self.val_viz_random)

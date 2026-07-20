@@ -125,10 +125,10 @@ class LossConfig:
 @dataclass
 class TrainingConfig:
     """Optimization + the run's time axis.
-    TrainingOrchestrator.run is 
+    TrainingOrchestrator.run is
     ``run(num_steps, log_every, save_every, val_every)`` (E3_end2end.py:159).
     """
-    learning_rate: float = 1e-3   
+    learning_rate: float = 1e-3
     device: Optional[str] = None  # "cuda" | "cpu" | None (auto -- TrainingStepper._resolve_device)
     losses: LossConfig = field(default_factory=LossConfig)
     verbose: bool = False
@@ -139,6 +139,7 @@ class TrainingConfig:
     val_every: int = 100
 
     batch_size: Optional[int] = None   # mini-batch over SHAPES; None = full batch every step
+    val_viz_random: bool = False       # True: sample random shapes for validation viz; False: use first N
 
 
 RangeOrFixed = Union[float, Tuple[float, float]]

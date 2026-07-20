@@ -101,16 +101,22 @@ class TrainingLogger:
         }, path)
         print(f"  checkpoint -> {path}")
 
-    def visualize_results(self, pred, step, max_num = 4, subdir = "vtk"):
+    def visualize_results(self, pred, step, max_num = 4, subdir = "vtk", random_sample=False):
         pred = pred.detach().cpu().numpy()
         out_dir = os.path.join(self.log_dir, subdir)
-        for i in range(pred.shape[0]):
-            if i < max_num:
-                path = os.path.join(out_dir, f"pred_shape{i}_step{step}.vtp")
-                save_vtp(create_polydata(pred[i]), path)
-        print(f" saved {max_num} of {pred.shape[0]} prediction VTP(s) at step {step}")
+        os.makedirs(out_dir, exist_ok=True)
 
-    def visualize_batch(self, batch, pred, step, subdir = "vtk", max_num= 4):
+        if random_sample and pred.shape[0] > 0:
+            indices = torch.randperm(pred.shape[0])[:min(max_num, pred.shape[0])].tolist()
+        else:
+            indices = list(range(min(max_num, pred.shape[0])))
+
+        for i in indices:
+            path = os.path.join(out_dir, f"pred_shape{i}_step{step}.vtp")
+            save_vtp(create_polydata(pred[i]), path)
+        print(f" saved {len(indices)} of {pred.shape[0]} prediction VTP(s) at step {step}")
+
+    def visualize_batch(self, batch, pred, step, subdir = "vtk", max_num= 4, random_sample=False):
         """Save, for this step, the input graph, the supergraph (if any), the true
         target verts, and the predictions.
 
@@ -118,53 +124,66 @@ class TrainingLogger:
         steps on. Graph tensors are expected on CPU (the trainer moves its own copies to
         the device), so they render directly. ``subdir`` selects the output folder under
         ``log_dir`` so train and validation VTPs never overwrite each other at the same
-        step number.
+        step number. ``random_sample`` determines whether to use random indices or first N.
         """
         graph, super_graph, true_verts, mask = batch[0], batch[1], batch[2], batch[3]
         if graph is not None:
-            self._save_graph_vtp(graph, step, name="input_graph", 
-                                is_supernodes=False, 
+            self._save_graph_vtp(graph, step, name="input_graph",
+                                is_supernodes=False,
                                 subdir=subdir,
-                                max_num = max_num)
+                                max_num = max_num, random_sample=random_sample)
         if super_graph is not None:
-            self._save_graph_vtp(super_graph, step, name="supergraph", 
-                                 is_supernodes=True, 
+            self._save_graph_vtp(super_graph, step, name="supergraph",
+                                 is_supernodes=True,
                                  subdir=subdir,
-                                  max_num = max_num)
+                                  max_num = max_num, random_sample=random_sample)
         if true_verts is not None:
-            self._save_true_verts(true_verts, mask, step, subdir=subdir,  max_num = max_num)
-            
-        if pred is not None:
-            self.visualize_results(pred, step, subdir=subdir,  max_num = max_num)
+            self._save_true_verts(true_verts, mask, step, subdir=subdir,  max_num = max_num, random_sample=random_sample)
 
-    def visualize_val_batch(self, batch, pred, step, max_num=4):
+        if pred is not None:
+            self.visualize_results(pred, step, subdir=subdir,  max_num = max_num, random_sample=random_sample)
+
+    def visualize_val_batch(self, batch, pred, step, max_num=4, random_sample=False):
         """Same as ``visualize_batch`` but writes to ``vtk/validation`` so the validation
         reconstructions live alongside — not on top of — the training ones.
 
         ``max_num`` is forwarded so validation honours the same per-shape cap as
-        training; it used to be dropped here, silently pinning validation to 4."""
+        training; it used to be dropped here, silently pinning validation to 4.
+        ``random_sample`` determines whether to use random indices or first N shapes."""
         self.visualize_batch(batch, pred, step, subdir=os.path.join("vtk", "validation"),
-                             max_num=max_num)
+                             max_num=max_num, random_sample=random_sample)
 
-    def _save_true_verts(self, true_verts, mask, step, max_num = 4, subdir = "vtk"):
+    def _save_true_verts(self, true_verts, mask, step, max_num = 4, subdir = "vtk", random_sample=False):
         """Save the reconstruction target as a point cloud (no edges), one VTP per shape.
         Padded entries are dropped via ``mask`` so only real vertices are written."""
         out_dir = os.path.join(self.log_dir, subdir)
+        os.makedirs(out_dir, exist_ok=True)
         tv = true_verts.detach().cpu()
         m = mask.detach().cpu().bool() if mask is not None else None
-        for i in range(tv.shape[0]):
-            if i < max_num:
-                pts = tv[i][m[i]] if m is not None else tv[i]        # [n_i, 3] valid verts
-                save_vtp(create_polydata(pts), os.path.join(out_dir, f"true_verts_shape{i}_step{step}.vtp"))
-        print(f"  saved {max_num} of {tv.shape[0]} true-verts VTP(s) at step {step}")
 
-    def _save_graph_vtp(self, graph, step, name, is_supernodes=False, max_num = 4, subdir = "vtk"):
+        if random_sample and tv.shape[0] > 0:
+            indices = torch.randperm(tv.shape[0])[:min(max_num, tv.shape[0])].tolist()
+        else:
+            indices = list(range(min(max_num, tv.shape[0])))
+
+        for i in indices:
+            pts = tv[i][m[i]] if m is not None else tv[i]        # [n_i, 3] valid verts
+            save_vtp(create_polydata(pts), os.path.join(out_dir, f"true_verts_shape{i}_step{step}.vtp"))
+        print(f"  saved {len(indices)} of {tv.shape[0]} true-verts VTP(s) at step {step}")
+
+    def _save_graph_vtp(self, graph, step, name, is_supernodes=False, max_num = 4, subdir = "vtk", random_sample=False):
         """Render one VTP per shape (with edges) for a homogeneous graph, or the merged
         full+super point set with aggregation lines for a bipartite supergraph."""
         out_dir = os.path.join(self.log_dir, subdir)
+        os.makedirs(out_dir, exist_ok=True)
         num_graphs = int(graph.batch.max().item()) + 1
-        for i in range(num_graphs):
-            if i < max_num:
+
+        if random_sample and num_graphs > 0:
+            indices = torch.randperm(num_graphs)[:min(max_num, num_graphs)].tolist()
+        else:
+            indices = list(range(min(max_num, num_graphs)))
+
+        for i in indices:
                 if is_supernodes:
                     pos, edges, node_field = get_bipartite_graph(graph, i)
                     vtp = create_polydata_w_lines(pos, edges)
@@ -199,7 +218,7 @@ class TrainingLogger:
                         vtp = add_point_field(vtp, normal_field.astype(np.float32), field_name="normal")
 
                 save_vtp(vtp, os.path.join(out_dir, f"{name}_shape{i}_step{step}.vtp"))
-        print(f"  saved {max_num} of {num_graphs} {name} VTP(s) at step {step}")
+        print(f"  saved {len(indices)} of {num_graphs} {name} VTP(s) at step {step}")
 
     def log_visualizations(self, data_dict, step, sample_idx=0, max_num = 4):
         """

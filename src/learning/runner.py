@@ -120,7 +120,7 @@ def build_callbacks(cfg, val_loader, extra=()):
         recorder,
         MetricsPlotter(recorder, every_n_steps=0),   # 0 = only on validation / train end
         CheckpointWriter(every_n_steps=cfg.training.save_every),
-        GeometryVisualizer(every_n_steps=cfg.training.save_every),
+        GeometryVisualizer(every_n_steps=cfg.training.save_every, val_viz_random=cfg.training.val_viz_random),
     ]
     if val_loader is not None and cfg.training.val_every:
         callbacks.append(ValidationRunner(val_loader, every_n_steps=cfg.training.val_every))

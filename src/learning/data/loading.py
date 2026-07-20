@@ -43,11 +43,11 @@ def load_dataset(data_path="DATA_ROOT", parts=["mouth", "nose"], shuffle=True, v
         print("Dataset not found - falling back to tests/data shapes.")
 
     if shuffle:
-        if seed is not None:
-            random.seed(seed)
         if verbose:
             print("shuffling samples")
-        random.shuffle(samples)
+        g = torch.Generator().manual_seed(int(seed)) if seed is not None else None
+        perm = torch.randperm(len(samples), generator=g)
+        samples = [samples[i] for i in perm.tolist()]
 
     vertices = [s[0] for s in samples]
     padded, mask = pad_vertex_list(vertices)

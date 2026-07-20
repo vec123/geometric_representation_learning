@@ -47,6 +47,7 @@ training:
   batch_size: 5
   device: null
   verbose: false
+  val_viz_random: false      # true: random shapes in validation viz; false: first N
   losses:
     terms:
       - name: recon
@@ -82,7 +83,7 @@ data:
     n_supernodes: 15
     use_supernodes: false
     sampling_mode_graph: uniform
-    sampling_mode_supernodes: uniform
+    sampling_mode_supernodes: fps
     recompute_area: true
     area_k: 8
     noise_std: 0.0
