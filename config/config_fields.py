@@ -1,4 +1,4 @@
-"""Experiment configuration schema (INSTRUCTIONS.md T5).
+"""Experiment configuration schema.
 field-by-field against the constructors:
 GroupEncoder 
 (src/learning/models/group_encoder.py), 

@@ -1,4 +1,4 @@
-"""LossComposer (INSTRUCTIONS.md T8): weighted sum of named terms as one thing.
+"""LossComposer: weighted sum of named terms as one thing.
 
 ``config.config_fields.LossTermConfig`` 
 is what a config layer converts into ``LossTerm``

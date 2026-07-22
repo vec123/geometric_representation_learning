@@ -49,7 +49,7 @@ dependencies = [
     # Utilities
     "tqdm==4.68.2",
 
-    # Experiment configs (INSTRUCTIONS.md T1 step 2; required by T13's config runner).
+    # Experiment configs.
     # Range rather than an exact pin: unlike the entries above there is no installed
     # version to mirror. 6.x is the last series supporting Python 3.8.
     "pyyaml>=6.0,<7.0",

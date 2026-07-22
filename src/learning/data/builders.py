@@ -1,4 +1,4 @@
-"""GraphBuilder strategies (INSTRUCTIONS.md T4).
+"""GraphBuilder strategies.
 
 Strategy: points -> (graph, supergraph|None), 
 selected by which class the caller instantiates.

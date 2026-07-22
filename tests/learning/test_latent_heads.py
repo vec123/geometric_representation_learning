@@ -1,4 +1,4 @@
-"""Tests for the LatentHead strategies (INSTRUCTIONS.md T9).
+"""Tests for the LatentHead strategies.
 
 The gaussian path's NUMBERS are pinned by tests/characterization (T9 step 3 is a
 behavior-preserving move); these tests cover the CONTRACT both heads satisfy and

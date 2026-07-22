@@ -1,4 +1,4 @@
-"""Experiment CLI (INSTRUCTIONS.md T13).
+"""Experiment CLI.
 
     python scripts/train.py configs/baseline.yaml
     python scripts/train.py configs/baseline.yaml --set training.num_steps=20

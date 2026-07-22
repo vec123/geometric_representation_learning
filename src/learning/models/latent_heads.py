@@ -1,4 +1,4 @@
-"""LatentHead strategies (INSTRUCTIONS.md T9).
+"""LatentHead strategies.
 
 Strategy: 
 pooled invariant scalars -> the latent an ``EncoderOutput`` carries.

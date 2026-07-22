@@ -1,5 +1,5 @@
 """
-Metric recording and plotting callbacks (INSTRUCTIONS.md T12).
+Metric recording and plotting callbacks.
 """
 
 import json

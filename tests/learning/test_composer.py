@@ -1,4 +1,4 @@
-"""Tests for LossComposer and frobenius_latent_loss (INSTRUCTIONS.md T8)."""
+"""Tests for LossComposer and frobenius_latent_loss."""
 
 import math
 
@@ -26,8 +26,7 @@ def test_weighted_sum_and_breakdown():
 
 
 def test_none_valued_term_is_skipped_not_zero_filled():
-    """The exact case INSTRUCTIONS.md T8 asks for: a composer with
-    {"recon": t, "kl": None} must return recon alone and a breakdown with one key."""
+    """A composer with {"recon": t, "kl": None} must return recon alone and a breakdown with one key."""
     composer = LossComposer([
         LossTerm("recon", weight=1.0),
         LossTerm("kl", weight=0.1),

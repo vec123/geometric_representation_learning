@@ -2,13 +2,13 @@
 
 These do NOT assert correctness. They pin what the pipeline computes TODAY --
 load_dataset -> build_training_graph -> GroupEncoder -> FoldingDecoder ->
-TrainingStepper -- so later refactoring tasks (T3-T11 in INSTRUCTIONS.md) fail
+TrainingStepper -- so later refactoring tasks fail
 loudly the moment they change a number, not just an interface.
 
 Expected values live in baseline_expected.json, not inline: an INTENDED change
 regenerates the file and the git diff shows exactly what moved.
 
-Two known-wrong behaviors are deliberately NOT pinned here (see INSTRUCTIONS.md T2):
+Two known-wrong behaviors are deliberately NOT pinned here:
   * validation reparameterizes with random noise under no_grad (fixed in T10)
   * run_validation discards avg_recon_loss / avg_kl_loss (fixed in T11)
 This file only exercises the TRAIN path, never eval_step / run_validation.
@@ -157,7 +157,7 @@ def expected():
 
 
 # --------------------------------------------------------------------------- #
-# Pinned characteristics -- each its own test, per INSTRUCTIONS.md T2 step 3.
+# Pinned characteristics -- each its own test.
 # --------------------------------------------------------------------------- #
 def test_graph_shape_is_pinned(baseline_run, expected):
     assert baseline_run["num_nodes"] == expected["num_nodes"]

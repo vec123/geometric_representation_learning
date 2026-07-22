@@ -1,4 +1,4 @@
-"""Tests for the callback split (INSTRUCTIONS.md T12).
+"""Tests for the callback split.
 
 Covers the Observer contract itself (hooks fire, cadences are per-callback, a
 callback can end the run), the append-only JSONL fix for E1, and the acceptance
